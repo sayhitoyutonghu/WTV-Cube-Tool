@@ -94,6 +94,70 @@ function shade(hex: string, amount: number) {
   return `rgb(${Math.round(r + (target - r) * p)}, ${Math.round(g + (target - g) * p)}, ${Math.round(b + (target - b) * p)})`;
 }
 
+function prepareLogoSource(image: HTMLImageElement) {
+  const maxDimension = 1200;
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const working = document.createElement("canvas");
+  working.width = width;
+  working.height = height;
+  const workingContext = working.getContext("2d", { willReadFrequently: true });
+  if (!workingContext) return working;
+  workingContext.drawImage(image, 0, 0, width, height);
+
+  const pixels = workingContext.getImageData(0, 0, width, height);
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      const red = pixels.data[index];
+      const green = pixels.data[index + 1];
+      const blue = pixels.data[index + 2];
+      const alpha = pixels.data[index + 3];
+      const isWhite = red > 246 && green > 246 && blue > 246;
+      if (alpha > 8 && !isWhite) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (minX > maxX || minY > maxY) return working;
+  const padding = Math.max(4, Math.round(Math.max(width, height) * 0.008));
+  minX = Math.max(0, minX - padding);
+  minY = Math.max(0, minY - padding);
+  maxX = Math.min(width - 1, maxX + padding);
+  maxY = Math.min(height - 1, maxY + padding);
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const cropped = document.createElement("canvas");
+  cropped.width = cropWidth;
+  cropped.height = cropHeight;
+  const croppedContext = cropped.getContext("2d", { willReadFrequently: true });
+  if (!croppedContext) return working;
+  croppedContext.drawImage(working, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  const croppedPixels = croppedContext.getImageData(0, 0, cropWidth, cropHeight);
+  for (let index = 0; index < croppedPixels.data.length; index += 4) {
+    const red = croppedPixels.data[index];
+    const green = croppedPixels.data[index + 1];
+    const blue = croppedPixels.data[index + 2];
+    const whiteness = Math.min(red, green, blue);
+    const matte = clamp((250 - whiteness) / 18, 0, 1);
+    croppedPixels.data[index + 3] = Math.round(croppedPixels.data[index + 3] * matte);
+  }
+  croppedContext.putImageData(croppedPixels, 0, 0);
+  return cropped;
+}
+
 function rotate(point: Vec3, rx: number, ry: number, rz: number): Vec3 {
   let { x, y, z } = point;
   const cx = Math.cos(rx);
@@ -154,7 +218,7 @@ function drawMark(
   ink: string,
   logoText: string,
   subline: string,
-  logo: HTMLImageElement | null,
+  logo: HTMLCanvasElement | null,
 ) {
   const bottomLeft = corners[0];
   const topRight = corners[2];
@@ -172,7 +236,10 @@ function drawMark(
   );
 
   if (logo) {
-    ctx.drawImage(logo, 0.1, 0.1, 0.8, 0.8);
+    const logoAspect = logo.width / logo.height;
+    const logoWidth = logoAspect >= 1 ? 0.92 : 0.92 * logoAspect;
+    const logoHeight = logoAspect >= 1 ? 0.92 / logoAspect : 0.92;
+    ctx.drawImage(logo, (1 - logoWidth) / 2, (1 - logoHeight) / 2, logoWidth, logoHeight);
   } else {
     ctx.fillStyle = ink;
     ctx.fillRect(0.13, 0.14, 0.74, 0.55);
@@ -222,7 +289,7 @@ function drawScene(
   settings: Settings,
   time: number,
   seed: number,
-  logo: HTMLImageElement | null,
+  logo: HTMLCanvasElement | null,
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -338,7 +405,7 @@ export default function WtvCubeStudio() {
   const animationRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number>(0);
   const playheadRef = useRef(0);
-  const logoRef = useRef<HTMLImageElement | null>(null);
+  const logoRef = useRef<HTMLCanvasElement | null>(null);
   const [playing, setPlaying] = useState(true);
   const [recording, setRecording] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -367,6 +434,20 @@ export default function WtvCubeStudio() {
     setSettings((current) => ({ ...current, [key]: value }));
     setPreset("Custom");
   }, []);
+
+  const activateDefaultLogo = useCallback(() => {
+    const image = new Image();
+    image.onload = () => {
+      logoRef.current = prepareLogoSource(image);
+      setNotice("WTV LOGO ACTIVE");
+      window.setTimeout(() => setNotice("LIVE PREVIEW"), 1000);
+    };
+    image.src = "/wtv-logo.png";
+  }, []);
+
+  useEffect(() => {
+    activateDefaultLogo();
+  }, [activateDefaultLogo]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -428,7 +509,7 @@ export default function WtvCubeStudio() {
     const image = new Image();
     const url = URL.createObjectURL(file);
     image.onload = () => {
-      logoRef.current = image;
+      logoRef.current = prepareLogoSource(image);
       URL.revokeObjectURL(url);
       setNotice("LOGO LOADED");
       setSeed((current) => current + 1);
@@ -567,7 +648,8 @@ export default function WtvCubeStudio() {
               <label><span>Mark</span><input value={settings.logoText} maxLength={4} onChange={(event) => updateSetting("logoText", event.target.value)} /></label>
               <label><span>Subline</span><input value={settings.subline} maxLength={10} onChange={(event) => updateSetting("subline", event.target.value)} /></label>
             </div>
-            <div className="upload-row">
+            <div className="upload-row three">
+              <button type="button" onClick={activateDefaultLogo}>WTV LOGO</button>
               <label className="upload-button">UPLOAD LOGO<input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} /></label>
               <button type="button" onClick={clearLogo}>USE TEXT MARK</button>
             </div>
