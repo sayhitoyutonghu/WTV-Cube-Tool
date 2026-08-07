@@ -32,6 +32,10 @@ test("server-renders the WTV Cube Studio controls", async () => {
   assert.match(html, /DOWNLOAD PNG/);
   assert.match(html, /Orbit/);
   assert.match(html, /Elevation/);
+  assert.match(html, /Zoom/);
+  assert.match(html, /Gravity/);
+  assert.match(html, /Bounce/);
+  assert.match(html, /10 SEC LOOP/);
   assert.match(html, /og:image/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
@@ -58,8 +62,13 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /hasTransparentBackground/, "transparent source artwork should preserve internal white details");
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
   assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
-  assert.match(component, /const progress = clamp\(local \/ settleDuration, 0, 1\)/, "motion should converge toward a settled end state");
-  assert.doesNotMatch(component, /\(time - delay \+ DURATION\) % DURATION/, "cubes must not start aligned and trigger later at random");
+  assert.match(component, /const DURATION = 10/, "the fall-and-align sequence should run for exactly ten seconds");
+  assert.match(component, /const acceleration = 7\.2 \* gravityScale \* speedScale/, "falling cubes should use gravity-driven acceleration");
+  assert.match(component, /const rebound = Math\.abs\(collisionWave\)/, "ground impacts should create damped rebounds");
+  assert.match(component, /const settleEnd = 8\.6/, "the simulation should converge before the ten-second end frame");
+  assert.match(component, /cameraZoom: clamp\(current\.cameraZoom/, "scrolling the preview should control camera zoom");
+  assert.match(component, /onPointerMove=\{moveCamera\}/, "dragging the preview should orbit the camera");
+  assert.doesNotMatch(component, /time \* settings\.speed/, "speed should shape gravity without preventing the fixed ten-second convergence");
   assert.match(component, /minimumLocalY/, "rotating cubes should maintain physical ground contact");
   assert.match(component, /drawShadowLayer/, "rendering should include layered soft shadows");
   assert.match(component, /visibleFaces/, "tumbling cubes should use camera-aware face rendering");

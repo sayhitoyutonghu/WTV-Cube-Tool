@@ -10,7 +10,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     title: "WTV Cube Studio",
-    description: "Create responsive 15-second WTV cube bumper loops for TikTok, Instagram, and YouTube.",
+    description: "Create responsive 10-second WTV cube bumper loops for TikTok, Instagram, and YouTube.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
     openGraph: {
       title: "WTV Cube Studio",

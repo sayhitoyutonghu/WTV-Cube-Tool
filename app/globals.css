@@ -96,7 +96,11 @@ button { color: inherit; }
   height: auto;
   box-shadow: 0 22px 70px rgba(0,0,0,.35);
   background: var(--yellow);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
+.motion-canvas.is-dragging { cursor: grabbing; }
 
 .stage-16-9 .motion-canvas { width: min(100%, calc((100vh - 160px) * 1.7778)); aspect-ratio: 16 / 9; }
 .stage-9-16 .motion-canvas { height: min(100%, calc(100vh - 160px)); aspect-ratio: 9 / 16; }
@@ -116,6 +120,21 @@ button { color: inherit; }
 }
 .stage-overlay-top { top: 18px; }
 .stage-overlay-bottom { bottom: 18px; }
+.camera-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 38px;
+  transform: translateX(-50%);
+  padding: 5px 8px 4px;
+  border: 1px solid rgba(255,255,255,.28);
+  background: rgba(17,17,17,.28);
+  color: rgba(255,255,255,.74);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  font: 700 8px/1 "Courier New", monospace;
+  letter-spacing: .08em;
+  opacity: .72;
+}
 
 .transport {
   display: grid;
@@ -190,6 +209,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; }
 .control-label output { color: rgba(17,17,17,.55); }
 .control-divider { display: flex; align-items: center; gap: 8px; margin: 18px 0 5px; color: rgba(17,17,17,.48); font: 700 9px/1 "Courier New", monospace; letter-spacing: .08em; }
 .control-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+.camera-help { margin: -2px 0 13px; color: rgba(17,17,17,.5); font: 400 8px/1.4 "Courier New", monospace; }
 input[type="range"] {
   --range-fill: 50%;
   appearance: none;

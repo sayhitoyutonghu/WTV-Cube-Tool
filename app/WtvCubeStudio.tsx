@@ -3,6 +3,7 @@
 import {
   ChangeEvent,
   PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -19,10 +20,13 @@ type Settings = {
   density: number;
   cubeSize: number;
   motion: number;
+  gravity: number;
+  bounce: number;
   speed: number;
   shadow: number;
   cameraYaw: number;
   cameraPitch: number;
+  cameraZoom: number;
   background: string;
   cube: string;
   ink: string;
@@ -31,7 +35,7 @@ type Settings = {
   mode: MotionMode;
 };
 
-const DURATION = 15;
+const DURATION = 10;
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "16:9": [1280, 720],
   "9:16": [720, 1280],
@@ -43,10 +47,13 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 7,
     cubeSize: 76,
     motion: 64,
+    gravity: 100,
+    bounce: 52,
     speed: 1,
     shadow: 48,
     cameraYaw: 45,
     cameraPitch: 35,
+    cameraZoom: 100,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
@@ -56,10 +63,13 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 6,
     cubeSize: 84,
     motion: 78,
+    gravity: 118,
+    bounce: 66,
     speed: 1.15,
     shadow: 42,
     cameraYaw: 40,
     cameraPitch: 31,
+    cameraZoom: 104,
     background: "#08a8df",
     cube: "#fff348",
     ink: "#111111",
@@ -69,10 +79,13 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 5,
     cubeSize: 94,
     motion: 34,
+    gravity: 82,
+    bounce: 30,
     speed: 0.72,
     shadow: 30,
     cameraYaw: 50,
     cameraPitch: 42,
+    cameraZoom: 92,
     background: "#f0eee6",
     cube: "#ff493d",
     ink: "#111111",
@@ -356,38 +369,87 @@ function getMotion(
   seed: number,
   mode: MotionMode,
   amount: number,
+  gravity: number,
+  bounce: number,
+  speed: number,
 ) {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
-  let delay = random * 2.7;
-  if (mode === "cascade") delay = Math.max(0, (row + 1) * 0.42 + (col + 1) * 0.16 + random * 0.35);
-  if (mode === "signal") delay = Math.abs((row + col) % 3) * 0.85 + random * 0.65;
+  const gravityScale = clamp(gravity / 100, 0.4, 1.8);
+  const restitution = clamp(bounce / 100, 0, 1);
+  const speedScale = clamp(speed, 0.35, 1.8);
 
-  const settleDuration = 5.4 + hash(index + 8, seed) * 2.8;
+  // The loop begins with every cube suspended above its final grid position.
+  // Seeded release timing creates the selected drop pattern without changing
+  // the deterministic, perfectly aligned end frame.
+  let delay = 0.08 + random * 1.2;
+  if (mode === "cascade") delay = Math.max(0.05, (row + 1) * 0.12 + (col + 1) * 0.055 + random * 0.18);
+  if (mode === "signal") delay = Math.abs((row + col) % 4) * 0.28 + random * 0.22 + 0.05;
+
+  const dropHeight = 6.2 + hash(index + 8, seed) * 7.4;
+  const acceleration = 7.2 * gravityScale * speedScale;
+  const fallDuration = Math.sqrt((2 * dropHeight) / acceleration);
   const local = time - delay;
-  const progress = clamp(local / settleDuration, 0, 1);
-  const decay = local <= 0 ? 1 : Math.pow(1 - progress, 2.35);
-  const directionX = hash(index + 17, seed) > 0.5 ? 1 : -1;
-  const directionZ = hash(index + 23, seed) > 0.5 ? 1 : -1;
-  const initialRx = directionX * (0.48 + hash(index + 31, seed) * 1.18) * strength;
-  const initialRz = directionZ * (0.36 + hash(index + 41, seed) * 1.02) * strength;
-  const initialRy = (hash(index + 49, seed) - 0.5) * 1.25 * strength;
-  const oscillations = 4.2 + hash(index + 57, seed) * 1.8;
-  const spring = local <= 0
-    ? Math.sin(time * 0.72 + random * Math.PI * 2) * 0.025 * strength
-    : Math.sin(progress * Math.PI * oscillations + random * Math.PI) * Math.exp(-progress * 4.15) * strength;
-  const bounce = local <= 0
-    ? 0
-    : Math.abs(Math.sin(progress * Math.PI * (oscillations + 0.8))) * Math.exp(-progress * 3.4) * 0.12 * strength;
-  const slideDecay = Math.pow(1 - progress, 2.1);
+  const fallProgress = clamp(local / fallDuration, 0, 1);
+  const impactElapsed = Math.max(0, local - fallDuration);
+  const impactTime = delay + fallDuration;
+  const settleEnd = 8.6;
+  const settleProgress = clamp(impactElapsed / Math.max(0.5, settleEnd - impactTime), 0, 1);
+  const alignment = settleProgress * settleProgress * (3 - 2 * settleProgress);
+  const remaining = 1 - alignment;
+
+  const initialRx = (hash(index + 17, seed) - 0.5) * 1.45 * strength;
+  const initialRy = (hash(index + 23, seed) - 0.5) * 1.65 * strength;
+  const initialRz = (hash(index + 31, seed) - 0.5) * 1.4 * strength;
+  const spinX = (hash(index + 41, seed) - 0.5) * 3.8 * strength;
+  const spinY = (hash(index + 49, seed) - 0.5) * 4.4 * strength;
+  const spinZ = (hash(index + 57, seed) - 0.5) * 3.6 * strength;
+  const impactRx = initialRx + spinX;
+  const impactRy = initialRy + spinY;
+  const impactRz = initialRz + spinZ;
+  const initialOffsetX = (hash(index + 67, seed) - 0.5) * 116 * strength;
+  const initialOffsetZ = (hash(index + 79, seed) - 0.5) * 116 * strength;
+  const driftX = (hash(index + 89, seed) - 0.5) * 32 * strength;
+  const driftZ = (hash(index + 97, seed) - 0.5) * 32 * strength;
+
+  if (local <= 0) {
+    return {
+      rx: initialRx,
+      ry: initialRy,
+      rz: initialRz,
+      lift: dropHeight,
+      offsetX: initialOffsetX,
+      offsetZ: initialOffsetZ,
+    };
+  }
+
+  if (local < fallDuration) {
+    return {
+      rx: initialRx + spinX * fallProgress,
+      ry: initialRy + spinY * fallProgress,
+      rz: initialRz + spinZ * fallProgress,
+      lift: Math.max(0, dropHeight - 0.5 * acceleration * local * local),
+      offsetX: initialOffsetX * (1 - fallProgress * 0.18) + driftX * fallProgress,
+      offsetZ: initialOffsetZ * (1 - fallProgress * 0.18) + driftZ * fallProgress,
+    };
+  }
+
+  const collisionRate = 6.3 + hash(index + 107, seed) * 2.2;
+  const damping = 1.05 + (1 - restitution) * 1.8;
+  const collisionWave = Math.sin(impactElapsed * collisionRate);
+  const collisionDecay = Math.exp(-impactElapsed * damping);
+  const rebound = Math.abs(collisionWave) * collisionDecay * (0.16 + restitution * 1.12) * remaining;
+  const rocking = collisionWave * collisionDecay * (0.12 + restitution * 0.34) * strength;
+  const impactOffsetX = initialOffsetX * 0.82 + driftX;
+  const impactOffsetZ = initialOffsetZ * 0.82 + driftZ;
 
   return {
-    rx: initialRx * decay + spring * 0.48 * directionX,
-    rz: initialRz * decay - spring * 0.42 * directionZ,
-    ry: initialRy * decay + spring * 0.18,
-    lift: bounce,
-    offsetX: (hash(index + 67, seed) - 0.5) * 38 * strength * slideDecay + spring * 5,
-    offsetZ: (hash(index + 79, seed) - 0.5) * 38 * strength * slideDecay - spring * 4,
+    rx: (impactRx + rocking) * remaining,
+    ry: (impactRy - rocking * 0.58) * remaining,
+    rz: (impactRz + rocking * 0.72) * remaining,
+    lift: rebound,
+    offsetX: (impactOffsetX + rocking * 18) * remaining,
+    offsetZ: (impactOffsetZ - rocking * 14) * remaining,
   };
 }
 
@@ -431,7 +493,7 @@ function drawScene(
   const spacing = 76 * 1.72;
   const extent = Math.max(columns, rows) * spacing;
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
-  const scale = Math.min(width, height) / Math.max(420, extent * extentFactor);
+  const scale = Math.min(width, height) / Math.max(420, extent * extentFactor) * (settings.cameraZoom / 100);
   const half = settings.cubeSize / 2;
   const viewVector = cameraVector(settings.cameraYaw, settings.cameraPitch);
   const yawRadians = settings.cameraYaw * Math.PI / 180;
@@ -458,9 +520,20 @@ function drawScene(
     ctx.fillStyle = shade(settings.background, -0.68);
     ctx.filter = `blur(${blur}px)`;
     for (const cube of cubes) {
-      const movement = getMotion(cube.index, cube.row, cube.col, time * settings.speed, seed, settings.mode, settings.motion);
+      const movement = getMotion(
+        cube.index,
+        cube.row,
+        cube.col,
+        time,
+        seed,
+        settings.mode,
+        settings.motion,
+        settings.gravity,
+        settings.bounce,
+        settings.speed,
+      );
       const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
-      const liftFade = 1 - clamp(movement.lift * 2.8, 0, 0.62);
+      const liftFade = clamp(1 / (1 + movement.lift * 0.82), 0.08, 1);
       ctx.globalAlpha = shadowStrength * alpha * liftFade;
       ctx.beginPath();
       ctx.ellipse(
@@ -480,7 +553,18 @@ function drawScene(
   drawShadowLayer(Math.max(2.2, half * scale * 0.075), 0.2, 0.68, 0.24, -0.08, 0.18);
 
   for (const cube of cubes) {
-    const movement = getMotion(cube.index, cube.row, cube.col, time * settings.speed, seed, settings.mode, settings.motion);
+    const movement = getMotion(
+      cube.index,
+      cube.row,
+      cube.col,
+      time,
+      seed,
+      settings.mode,
+      settings.motion,
+      settings.gravity,
+      settings.bounce,
+      settings.speed,
+    );
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
       { x: half, y: -half, z: -half },
@@ -575,8 +659,10 @@ export default function WtvCubeStudio() {
   const lastFrameRef = useRef<number>(0);
   const playheadRef = useRef(0);
   const logoRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraDragRef = useRef<{ pointerId: number; startX: number; startY: number; yaw: number; pitch: number } | null>(null);
   const [playing, setPlaying] = useState(true);
   const [recording, setRecording] = useState(false);
+  const [cameraDragging, setCameraDragging] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [seed, setSeed] = useState(24);
@@ -586,10 +672,13 @@ export default function WtvCubeStudio() {
     density: 7,
     cubeSize: 76,
     motion: 64,
+    gravity: 100,
+    bounce: 52,
     speed: 1,
     shadow: 48,
     cameraYaw: 45,
     cameraPitch: 35,
+    cameraZoom: 100,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
@@ -712,7 +801,7 @@ export default function WtvCubeStudio() {
       return;
     }
     setRecording(true);
-    setNotice("REC 00:15");
+    setNotice("REC 00:10");
     setTimeline(0);
     setPlaying(true);
     const stream = canvas.captureStream(30);
@@ -755,6 +844,42 @@ export default function WtvCubeStudio() {
     target.addEventListener("pointerup", end);
   };
 
+  const startCameraDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    cameraDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      yaw: settings.cameraYaw,
+      pitch: settings.cameraPitch,
+    };
+    setCameraDragging(true);
+  };
+
+  const moveCamera = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = cameraDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const nextYaw = clamp(drag.yaw + (event.clientX - drag.startX) * 0.16, 10, 80);
+    const nextPitch = clamp(drag.pitch - (event.clientY - drag.startY) * 0.14, 12, 68);
+    setSettings((current) => ({ ...current, cameraYaw: Math.round(nextYaw), cameraPitch: Math.round(nextPitch) }));
+    setPreset("Custom");
+  };
+
+  const endCameraDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (cameraDragRef.current?.pointerId !== event.pointerId) return;
+    cameraDragRef.current = null;
+    setCameraDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const zoomCamera = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    const zoomDelta = event.deltaY > 0 ? -4 : 4;
+    setSettings((current) => ({ ...current, cameraZoom: clamp(current.cameraZoom + zoomDelta, 65, 150) }));
+    setPreset("Custom");
+  };
+
   const formattedTime = useMemo(() => `${Math.floor(playhead).toString().padStart(2, "0")}:${Math.floor((playhead % 1) * 30).toString().padStart(2, "0")}`, [playhead]);
 
   return (
@@ -765,15 +890,25 @@ export default function WtvCubeStudio() {
           <span className="brand-title">CUBE STUDIO</span>
           <span className="version">v1.0</span>
         </div>
-        <div className="top-meta"><span className="live-dot" /> RESPONSIVE BUMPER GENERATOR <span>15 SEC LOOP</span></div>
+        <div className="top-meta"><span className="live-dot" /> RESPONSIVE BUMPER GENERATOR <span>10 SEC LOOP</span></div>
       </header>
 
       <section className="workspace">
         <div className="preview-column">
           <div className={`stage stage-${ratioClass}`}>
-            <canvas ref={canvasRef} className="motion-canvas" aria-label="Animated WTV cube preview" />
+            <canvas
+              ref={canvasRef}
+              className={`motion-canvas${cameraDragging ? " is-dragging" : ""}`}
+              aria-label="Animated WTV cube preview. Drag to orbit and scroll to zoom."
+              onPointerDown={startCameraDrag}
+              onPointerMove={moveCamera}
+              onPointerUp={endCameraDrag}
+              onPointerCancel={endCameraDrag}
+              onWheel={zoomCamera}
+            />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
-            <div className="stage-overlay stage-overlay-bottom"><span>SEED {seed.toString().padStart(4, "0")}</span><span>CAM {settings.cameraYaw}° / {settings.cameraPitch}°</span><span>{settings.mode.toUpperCase()} / {settings.speed.toFixed(2)}X</span></div>
+            <div className="camera-hint">DRAG TO ORBIT · SCROLL TO ZOOM</div>
+            <div className="stage-overlay stage-overlay-bottom"><span>SEED {seed.toString().padStart(4, "0")}</span><span>CAM {settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{settings.mode.toUpperCase()} / {settings.speed.toFixed(2)}X</span></div>
           </div>
 
           <div className="transport">
@@ -782,9 +917,9 @@ export default function WtvCubeStudio() {
             <div className="timeline" onPointerDown={dragTimeline} role="slider" aria-label="Animation playhead" aria-valuemin={0} aria-valuemax={DURATION} aria-valuenow={playhead} tabIndex={0}>
               <span className="timeline-fill" style={{ width: `${(playhead / DURATION) * 100}%` }} />
               <span className="timeline-head" style={{ left: `${(playhead / DURATION) * 100}%` }} />
-              {[0, 3, 6, 9, 12, 15].map((time) => <i key={time} style={{ left: `${(time / DURATION) * 100}%` }} />)}
+              {[0, 2, 4, 6, 8, 10].map((time) => <i key={time} style={{ left: `${(time / DURATION) * 100}%` }} />)}
             </div>
-            <span className="timecode">15:00</span>
+            <span className="timecode">10:00</span>
             <button className="transport-button" type="button" onClick={restart}>↺ RESET</button>
             <button className="transport-button" type="button" onClick={randomize}>✦ NEW SEED</button>
           </div>
@@ -805,14 +940,19 @@ export default function WtvCubeStudio() {
             <div className="section-heading"><span>02</span><h2>GRID + MOTION</h2></div>
             <RangeControl label="Density" value={settings.density} min={4} max={10} onChange={(value) => updateSetting("density", value)} />
             <RangeControl label="Cube size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
+            <div className="control-divider"><span>PHYSICS</span></div>
+            <RangeControl label="Gravity" value={settings.gravity} min={45} max={170} suffix="%" onChange={(value) => updateSetting("gravity", value)} />
+            <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
-            <RangeControl label="Speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
+            <RangeControl label="Fall speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
             <div className="control-divider"><span>CAMERA</span></div>
-            <RangeControl label="Orbit" value={settings.cameraYaw} min={25} max={65} suffix="°" onChange={(value) => updateSetting("cameraYaw", value)} />
-            <RangeControl label="Elevation" value={settings.cameraPitch} min={20} max={55} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
+            <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="°" onChange={(value) => updateSetting("cameraYaw", value)} />
+            <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
+            <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
+            <p className="camera-help">Drag directly on the preview to orbit. Scroll to zoom.</p>
             <div className="segmented three">
-              {(["settle", "cascade", "signal"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode}</button>)}
+              {(["settle", "cascade", "signal"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode === "signal" ? "wave" : mode}</button>)}
             </div>
           </section>
 
@@ -835,10 +975,10 @@ export default function WtvCubeStudio() {
               {(["16:9", "9:16", "1:1"] as Aspect[]).map((item) => <button key={item} type="button" className={aspect === item ? "active" : ""} onClick={() => setAspect(item)}>{item}</button>)}
             </div>
             <div className="export-grid">
-              <button className="primary-action" type="button" onClick={recordVideo} disabled={recording}>{recording ? "RECORDING 15S..." : "● RECORD WEBM"}</button>
+              <button className="primary-action" type="button" onClick={recordVideo} disabled={recording}>{recording ? "RECORDING 10S..." : "● RECORD WEBM"}</button>
               <button type="button" onClick={downloadPng}>DOWNLOAD PNG</button>
             </div>
-            <p>Video records the live 15-second loop at 30 fps. Use the same seed across aspect ratios for a matched rollout system.</p>
+            <p>Video records the full 10-second fall-and-align sequence at 30 fps. Use the same seed across aspect ratios for a matched rollout system.</p>
           </section>
         </aside>
       </section>
