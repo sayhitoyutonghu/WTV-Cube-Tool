@@ -237,9 +237,11 @@ function drawMark(
 
   if (logo) {
     const logoAspect = logo.width / logo.height;
-    const logoWidth = logoAspect >= 1 ? 0.92 : 0.92 * logoAspect;
-    const logoHeight = logoAspect >= 1 ? 0.92 / logoAspect : 0.92;
-    ctx.drawImage(logo, (1 - logoWidth) / 2, (1 - logoHeight) / 2, logoWidth, logoHeight);
+    const maxLogoWidth = 0.82;
+    const maxLogoHeight = 0.62;
+    const logoWidth = logoAspect >= maxLogoWidth / maxLogoHeight ? maxLogoWidth : maxLogoHeight * logoAspect;
+    const logoHeight = logoAspect >= maxLogoWidth / maxLogoHeight ? maxLogoWidth / logoAspect : maxLogoHeight;
+    ctx.drawImage(logo, (1 - logoWidth) / 2, 0.08 + (maxLogoHeight - logoHeight) / 2, logoWidth, logoHeight);
   } else {
     ctx.fillStyle = ink;
     ctx.fillRect(0.13, 0.14, 0.74, 0.55);
@@ -248,10 +250,12 @@ function drawMark(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(logoText.slice(0, 4).toUpperCase(), 0.5, 0.425, 0.66);
-    ctx.fillStyle = ink;
-    ctx.font = "800 0.11px Arial, sans-serif";
-    ctx.fillText(subline.slice(0, 10).toUpperCase(), 0.5, 0.81, 0.78);
   }
+  ctx.fillStyle = ink;
+  ctx.font = "800 0.115px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(subline.slice(0, 12), 0.5, 0.82, 0.82);
   ctx.restore();
 }
 
@@ -306,9 +310,12 @@ function drawScene(
   const aspect = width / height;
   const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
   const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
-  const spacing = settings.cubeSize * 1.72;
+  // Keep the grid footprint stable so cube size remains an independent visual
+  // control in every aspect ratio instead of cancelling out through auto-fit.
+  const spacing = 76 * 1.72;
   const extent = Math.max(columns, rows) * spacing;
-  const scale = Math.min(width, height) / Math.max(420, extent * (aspect > 1.2 ? 0.72 : 0.58));
+  const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
+  const scale = Math.min(width, height) / Math.max(420, extent * extentFactor);
   const half = settings.cubeSize / 2;
   const cubes: Array<{ index: number; row: number; col: number; x: number; z: number; depth: number }> = [];
 
@@ -647,7 +654,7 @@ export default function WtvCubeStudio() {
             <div className="section-heading"><span>03</span><h2>BRAND</h2></div>
             <div className="text-grid">
               <label><span>Mark</span><input value={settings.logoText} maxLength={4} onChange={(event) => updateSetting("logoText", event.target.value)} /></label>
-              <label><span>Subline</span><input value={settings.subline} maxLength={10} onChange={(event) => updateSetting("subline", event.target.value)} /></label>
+              <label><span>Type / subline</span><input value={settings.subline} maxLength={12} onChange={(event) => updateSetting("subline", event.target.value)} /></label>
             </div>
             <div className="upload-row three">
               <button type="button" onClick={activateDefaultLogo}>WTV LOGO</button>

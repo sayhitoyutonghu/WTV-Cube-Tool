@@ -50,6 +50,9 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /image\.src = "\/wtv-logo\.png"/);
   assert.match(component, /prepareLogoSource/);
   assert.equal(component.match(/drawMark\(/g)?.length, 2, "drawMark should have one definition and one single-face call");
+  assert.doesNotMatch(component, /const spacing = settings\.cubeSize/, "grid spacing must not cancel the cube-size control");
+  assert.match(component, /const spacing = 76 \* 1\.72/);
+  assert.match(component, /ctx\.fillText\(subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
