@@ -188,6 +188,8 @@ input[type="color"]::-webkit-color-swatch { border: 0; }
 
 .range-control { display: block; margin: 13px 0; }
 .control-label output { color: rgba(17,17,17,.55); }
+.control-divider { display: flex; align-items: center; gap: 8px; margin: 18px 0 5px; color: rgba(17,17,17,.48); font: 700 9px/1 "Courier New", monospace; letter-spacing: .08em; }
+.control-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 input[type="range"] {
   --range-fill: 50%;
   appearance: none;

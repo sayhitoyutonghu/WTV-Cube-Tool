@@ -30,6 +30,8 @@ test("server-renders the WTV Cube Studio controls", async () => {
   assert.match(html, /Animated WTV cube preview/);
   assert.match(html, /RECORD WEBM/);
   assert.match(html, /DOWNLOAD PNG/);
+  assert.match(html, /Orbit/);
+  assert.match(html, /Elevation/);
   assert.match(html, /og:image/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
@@ -55,6 +57,12 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /ctx\.fillText\(subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
   assert.match(component, /hasTransparentBackground/, "transparent source artwork should preserve internal white details");
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
+  assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
+  assert.match(component, /const progress = clamp\(local \/ settleDuration, 0, 1\)/, "motion should converge toward a settled end state");
+  assert.doesNotMatch(component, /\(time - delay \+ DURATION\) % DURATION/, "cubes must not start aligned and trigger later at random");
+  assert.match(component, /minimumLocalY/, "rotating cubes should maintain physical ground contact");
+  assert.match(component, /drawShadowLayer/, "rendering should include layered soft shadows");
+  assert.match(component, /visibleFaces/, "tumbling cubes should use camera-aware face rendering");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));

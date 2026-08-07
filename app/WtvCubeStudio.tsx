@@ -21,6 +21,8 @@ type Settings = {
   motion: number;
   speed: number;
   shadow: number;
+  cameraYaw: number;
+  cameraPitch: number;
   background: string;
   cube: string;
   ink: string;
@@ -42,7 +44,9 @@ const PRESETS: Record<string, Partial<Settings>> = {
     cubeSize: 76,
     motion: 64,
     speed: 1,
-    shadow: 52,
+    shadow: 48,
+    cameraYaw: 45,
+    cameraPitch: 35,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
@@ -54,6 +58,8 @@ const PRESETS: Record<string, Partial<Settings>> = {
     motion: 78,
     speed: 1.15,
     shadow: 42,
+    cameraYaw: 40,
+    cameraPitch: 31,
     background: "#08a8df",
     cube: "#fff348",
     ink: "#111111",
@@ -65,6 +71,8 @@ const PRESETS: Record<string, Partial<Settings>> = {
     motion: 34,
     speed: 0.72,
     shadow: 30,
+    cameraYaw: 50,
+    cameraPitch: 42,
     background: "#f0eee6",
     cube: "#ff493d",
     ink: "#111111",
@@ -215,10 +223,42 @@ function rotate(point: Vec3, rx: number, ry: number, rz: number): Vec3 {
   return { x: x * cz - y * sz, y: x * sz + y * cz, z };
 }
 
-function project(point: Vec3, width: number, height: number, scale: number): Vec2 {
-  const isoX = (point.x - point.z) * 0.7071;
-  const depth = (point.x + point.z) * 0.7071;
-  const pitch = 0.61;
+function subtract(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function dot(a: Vec3, b: Vec3) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function normalize(vector: Vec3): Vec3 {
+  const length = Math.hypot(vector.x, vector.y, vector.z) || 1;
+  return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
+}
+
+function cameraVector(yawDegrees: number, pitchDegrees: number): Vec3 {
+  const yaw = yawDegrees * Math.PI / 180;
+  const pitch = pitchDegrees * Math.PI / 180;
+  return normalize({
+    x: Math.sin(yaw) * Math.cos(pitch),
+    y: Math.sin(pitch),
+    z: Math.cos(yaw) * Math.cos(pitch),
+  });
+}
+
+function project(point: Vec3, width: number, height: number, scale: number, yawDegrees: number, pitchDegrees: number): Vec2 {
+  const yaw = yawDegrees * Math.PI / 180;
+  const pitch = pitchDegrees * Math.PI / 180;
+  const isoX = point.x * Math.cos(yaw) - point.z * Math.sin(yaw);
+  const depth = point.x * Math.sin(yaw) + point.z * Math.cos(yaw);
   const cameraY = point.y * Math.cos(pitch) - depth * Math.sin(pitch);
   return {
     x: width * 0.5 + isoX * scale,
@@ -226,7 +266,7 @@ function project(point: Vec3, width: number, height: number, scale: number): Vec
   };
 }
 
-function polygon(ctx: CanvasRenderingContext2D, points: Vec2[], fill: string) {
+function polygon(ctx: CanvasRenderingContext2D, points: Vec2[], fill: string | CanvasGradient, edgeAlpha = 0.055) {
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
   for (let index = 1; index < points.length; index += 1) {
@@ -235,6 +275,19 @@ function polygon(ctx: CanvasRenderingContext2D, points: Vec2[], fill: string) {
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
+  ctx.strokeStyle = `rgba(255, 255, 255, ${edgeAlpha})`;
+  ctx.lineWidth = 0.65;
+  ctx.stroke();
+}
+
+function faceGradient(ctx: CanvasRenderingContext2D, points: Vec2[], color: string, lightAmount: number) {
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const gradient = ctx.createLinearGradient(0, minY, 0, Math.max(minY + 1, maxY));
+  gradient.addColorStop(0, shade(color, lightAmount + 0.045));
+  gradient.addColorStop(0.48, shade(color, lightAmount));
+  gradient.addColorStop(1, shade(color, lightAmount - 0.035));
+  return gradient;
 }
 
 function clipFace(ctx: CanvasRenderingContext2D, points: Vec2[]) {
@@ -305,22 +358,36 @@ function getMotion(
   amount: number,
 ) {
   const random = hash(index + 1, seed);
-  let delay = random * 7.2;
-  if (mode === "cascade") delay = (row * 0.58 + col * 0.2) % 7.4;
-  if (mode === "signal") delay = ((row + col) % 3) * 1.6 + random * 1.2;
+  const strength = amount / 100;
+  let delay = random * 2.7;
+  if (mode === "cascade") delay = Math.max(0, (row + 1) * 0.42 + (col + 1) * 0.16 + random * 0.35);
+  if (mode === "signal") delay = Math.abs((row + col) % 3) * 0.85 + random * 0.65;
 
-  const local = (time - delay + DURATION) % DURATION;
-  const active = local < 5.4;
-  const envelope = active ? Math.exp(-local * 0.62) : 0;
-  const kick = Math.sin(local * (5.7 + random * 2.2)) * envelope;
-  const magnitude = (amount / 100) * (0.28 + random * 0.95);
-  const direction = hash(index + 17, seed) > 0.5 ? 1 : -1;
+  const settleDuration = 5.4 + hash(index + 8, seed) * 2.8;
+  const local = time - delay;
+  const progress = clamp(local / settleDuration, 0, 1);
+  const decay = local <= 0 ? 1 : Math.pow(1 - progress, 2.35);
+  const directionX = hash(index + 17, seed) > 0.5 ? 1 : -1;
+  const directionZ = hash(index + 23, seed) > 0.5 ? 1 : -1;
+  const initialRx = directionX * (0.48 + hash(index + 31, seed) * 1.18) * strength;
+  const initialRz = directionZ * (0.36 + hash(index + 41, seed) * 1.02) * strength;
+  const initialRy = (hash(index + 49, seed) - 0.5) * 1.25 * strength;
+  const oscillations = 4.2 + hash(index + 57, seed) * 1.8;
+  const spring = local <= 0
+    ? Math.sin(time * 0.72 + random * Math.PI * 2) * 0.025 * strength
+    : Math.sin(progress * Math.PI * oscillations + random * Math.PI) * Math.exp(-progress * 4.15) * strength;
+  const bounce = local <= 0
+    ? 0
+    : Math.abs(Math.sin(progress * Math.PI * (oscillations + 0.8))) * Math.exp(-progress * 3.4) * 0.12 * strength;
+  const slideDecay = Math.pow(1 - progress, 2.1);
 
   return {
-    rx: kick * magnitude * direction * (hash(index + 33, seed) > 0.36 ? 1 : 0.25),
-    rz: kick * magnitude * -direction * (hash(index + 51, seed) > 0.52 ? 0.72 : 0.18),
-    ry: kick * magnitude * 0.22,
-    lift: Math.abs(kick) * magnitude * 0.42,
+    rx: initialRx * decay + spring * 0.48 * directionX,
+    rz: initialRz * decay - spring * 0.42 * directionZ,
+    ry: initialRy * decay + spring * 0.18,
+    lift: bounce,
+    offsetX: (hash(index + 67, seed) - 0.5) * 38 * strength * slideDecay + spring * 5,
+    offsetZ: (hash(index + 79, seed) - 0.5) * 38 * strength * slideDecay - spring * 4,
   };
 }
 
@@ -335,13 +402,26 @@ function drawScene(
   if (!ctx) return;
   const width = canvas.width;
   const height = canvas.height;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
-  const background = ctx.createRadialGradient(width * 0.48, height * 0.38, 0, width * 0.5, height * 0.5, Math.max(width, height) * 0.82);
-  background.addColorStop(0, shade(settings.background, 0.08));
-  background.addColorStop(0.68, settings.background);
-  background.addColorStop(1, shade(settings.background, -0.055));
+  const background = ctx.createRadialGradient(width * 0.43, height * 0.3, 0, width * 0.52, height * 0.54, Math.max(width, height) * 0.88);
+  background.addColorStop(0, shade(settings.background, 0.115));
+  background.addColorStop(0.54, shade(settings.background, 0.025));
+  background.addColorStop(1, shade(settings.background, -0.045));
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.globalAlpha = 0.022;
+  ctx.fillStyle = "#3d3510";
+  for (let grainIndex = 0; grainIndex < 180; grainIndex += 1) {
+    const grainX = hash(grainIndex + 401, seed) * width;
+    const grainY = hash(grainIndex + 809, seed) * height;
+    const grainSize = 0.45 + hash(grainIndex + 1201, seed) * 0.8;
+    ctx.fillRect(grainX, grainY, grainSize, grainSize);
+  }
+  ctx.restore();
 
   const aspect = width / height;
   const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
@@ -353,6 +433,9 @@ function drawScene(
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
   const scale = Math.min(width, height) / Math.max(420, extent * extentFactor);
   const half = settings.cubeSize / 2;
+  const viewVector = cameraVector(settings.cameraYaw, settings.cameraPitch);
+  const yawRadians = settings.cameraYaw * Math.PI / 180;
+  const projectPoint = (point: Vec3) => project(point, width, height, scale, settings.cameraYaw, settings.cameraPitch);
   const cubes: Array<{ index: number; row: number; col: number; x: number; z: number; depth: number }> = [];
 
   for (let row = -1; row <= rows; row += 1) {
@@ -361,26 +444,43 @@ function drawScene(
       const offset = row % 2 === 0 ? 0 : spacing * 0.5;
       const x = (col - (columns - 1) / 2) * spacing + offset;
       const z = (row - (rows - 1) / 2) * spacing;
-      cubes.push({ index, row, col, x, z, depth: x + z });
+      const depth = x * Math.sin(yawRadians) + z * Math.cos(yawRadians);
+      cubes.push({ index, row, col, x, z, depth });
     }
   }
   cubes.sort((a, b) => a.depth - b.depth);
 
-  ctx.save();
-  ctx.globalAlpha = clamp(settings.shadow / 100, 0, 0.8) * 0.36;
-  ctx.fillStyle = "#4d4510";
-  ctx.filter = `blur(${Math.max(4, half * scale * 0.17)}px)`;
-  for (const cube of cubes) {
-    const ground = project({ x: cube.x, y: 0, z: cube.z }, width, height, scale);
-    ctx.beginPath();
-    ctx.ellipse(ground.x - half * scale * 0.28, ground.y + half * scale * 0.34, half * scale * 0.84, half * scale * 0.35, -0.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
+  const shadowStrength = clamp(settings.shadow / 100, 0, 1);
+  const drawShadowLayer = (blur: number, alpha: number, radiusX: number, radiusY: number, offsetX: number, offsetY: number) => {
+    ctx.save();
+    ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = shadowStrength * alpha;
+    ctx.fillStyle = shade(settings.background, -0.68);
+    ctx.filter = `blur(${blur}px)`;
+    for (const cube of cubes) {
+      const movement = getMotion(cube.index, cube.row, cube.col, time * settings.speed, seed, settings.mode, settings.motion);
+      const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
+      const liftFade = 1 - clamp(movement.lift * 2.8, 0, 0.62);
+      ctx.globalAlpha = shadowStrength * alpha * liftFade;
+      ctx.beginPath();
+      ctx.ellipse(
+        ground.x + half * scale * offsetX,
+        ground.y + half * scale * offsetY,
+        half * scale * radiusX,
+        half * scale * radiusY,
+        -0.24,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+  drawShadowLayer(Math.max(7, half * scale * 0.24), 0.24, 1.02, 0.42, -0.3, 0.42);
+  drawShadowLayer(Math.max(2.2, half * scale * 0.075), 0.2, 0.68, 0.24, -0.08, 0.18);
 
   for (const cube of cubes) {
     const movement = getMotion(cube.index, cube.row, cube.col, time * settings.speed, seed, settings.mode, settings.motion);
-    const yCenter = half + movement.lift * settings.cubeSize;
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
       { x: half, y: -half, z: -half },
@@ -391,22 +491,47 @@ function drawScene(
       { x: half, y: half, z: half },
       { x: -half, y: half, z: half },
     ];
-    const vertices = localVertices.map((point) => {
-      const turned = rotate(point, movement.rx, movement.ry, movement.rz);
-      return project({ x: turned.x + cube.x, y: turned.y + yCenter, z: turned.z + cube.z }, width, height, scale);
-    });
+    const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
+    const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
+    const contactHeight = -minimumLocalY + movement.lift * settings.cubeSize;
+    const worldVertices = rotatedVertices.map((point) => ({
+      x: point.x + cube.x + movement.offsetX,
+      y: point.y + contactHeight,
+      z: point.z + cube.z + movement.offsetZ,
+    }));
+    const screenVertices = worldVertices.map(projectPoint);
+    const lightVector = normalize({ x: -0.42, y: 1, z: -0.52 });
+    const faceDefinitions = [
+      { id: "z-plus", indices: [3, 2, 6, 7], hasMark: true },
+      { id: "x-plus", indices: [1, 5, 6, 2], hasMark: false },
+      { id: "top", indices: [4, 7, 6, 5], hasMark: false },
+      { id: "z-minus", indices: [0, 4, 5, 1], hasMark: false },
+      { id: "x-minus", indices: [0, 3, 7, 4], hasMark: false },
+      { id: "bottom", indices: [0, 1, 2, 3], hasMark: false },
+    ];
+    const visibleFaces = faceDefinitions.flatMap((face) => {
+      const [first, second, third] = face.indices;
+      const normal = normalize(cross(
+        subtract(worldVertices[second], worldVertices[first]),
+        subtract(worldVertices[third], worldVertices[first]),
+      ));
+      const visibility = dot(normal, viewVector);
+      if (visibility <= 0.015) return [];
+      const depth = face.indices.reduce((sum, vertexIndex) => sum + dot(worldVertices[vertexIndex], viewVector), 0) / face.indices.length;
+      return [{ ...face, normal, depth }];
+    }).sort((a, b) => a.depth - b.depth);
 
-    const top = [vertices[4], vertices[5], vertices[6], vertices[7]];
-    const xFace = [vertices[1], vertices[2], vertices[6], vertices[5]];
-    const zFace = [vertices[3], vertices[2], vertices[6], vertices[7]];
-
-    polygon(ctx, zFace, shade(settings.cube, -0.105));
-    polygon(ctx, xFace, shade(settings.cube, -0.035));
-    polygon(ctx, top, shade(settings.cube, 0.105));
-
-    // The mark is a physical sticker on one local face only. The z-face corner
-    // order stays top-left to top-right, so the artwork never mirrors.
-    drawMark(ctx, zFace, settings.cube, settings.ink, settings.logoText, settings.subline, logo);
+    for (const face of visibleFaces) {
+      const points = face.indices.map((vertexIndex) => screenVertices[vertexIndex]);
+      const illumination = Math.max(0, dot(face.normal, lightVector));
+      const lightAmount = -0.085 + illumination * 0.19;
+      polygon(ctx, points, faceGradient(ctx, points, settings.cube, lightAmount));
+      if (face.hasMark) {
+        // This is the cube's one physical sticker face. Back-face culling keeps
+        // the artwork correctly oriented instead of mirroring it on another side.
+        drawMark(ctx, points, settings.cube, settings.ink, settings.logoText, settings.subline, logo);
+      }
+    }
   }
 
   const vignette = ctx.createRadialGradient(width * 0.5, height * 0.47, Math.min(width, height) * 0.22, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
@@ -462,7 +587,9 @@ export default function WtvCubeStudio() {
     cubeSize: 76,
     motion: 64,
     speed: 1,
-    shadow: 52,
+    shadow: 48,
+    cameraYaw: 45,
+    cameraPitch: 35,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
@@ -646,7 +773,7 @@ export default function WtvCubeStudio() {
           <div className={`stage stage-${ratioClass}`}>
             <canvas ref={canvasRef} className="motion-canvas" aria-label="Animated WTV cube preview" />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
-            <div className="stage-overlay stage-overlay-bottom"><span>SEED {seed.toString().padStart(4, "0")}</span><span>{settings.mode.toUpperCase()} / {settings.speed.toFixed(2)}X</span></div>
+            <div className="stage-overlay stage-overlay-bottom"><span>SEED {seed.toString().padStart(4, "0")}</span><span>CAM {settings.cameraYaw}° / {settings.cameraPitch}°</span><span>{settings.mode.toUpperCase()} / {settings.speed.toFixed(2)}X</span></div>
           </div>
 
           <div className="transport">
@@ -681,6 +808,9 @@ export default function WtvCubeStudio() {
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
             <RangeControl label="Speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
+            <div className="control-divider"><span>CAMERA</span></div>
+            <RangeControl label="Orbit" value={settings.cameraYaw} min={25} max={65} suffix="°" onChange={(value) => updateSetting("cameraYaw", value)} />
+            <RangeControl label="Elevation" value={settings.cameraPitch} min={20} max={55} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
             <div className="segmented three">
               {(["settle", "cascade", "signal"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode}</button>)}
             </div>
