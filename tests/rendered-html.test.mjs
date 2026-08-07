@@ -73,6 +73,9 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /sequenceDuration: 6/, "the default sequence should settle faster than the old ten-second version");
   assert.match(component, /const simulationTime = time \* \(MAX_DURATION \/ clamp\(sequenceDuration, 3, MAX_DURATION\)\)/, "the duration control should time-compress the complete physics sequence");
   assert.match(component, /const acceleration = 7\.2 \* gravityScale \* speedScale/, "falling cubes should use gravity-driven acceleration");
+  assert.match(component, /const alignSpeedScale = clamp\(alignSpeed, 0\.75, 4\)/, "face alignment should have an independent speed control");
+  assert.match(component, /label="Face align" value=\{settings\.alignSpeed\}/, "the face alignment speed controller should be visible");
+  assert.match(component, /const alignDuration = Math\.max\(0\.22, \(settleEnd - impactTime\) \/ alignSpeedScale\)/, "alignment speed should shorten only the post-impact convergence");
   assert.match(component, /const rebound = Math\.abs\(collisionWave\)/, "ground impacts should create damped rebounds");
   assert.match(component, /const settleEnd = 8\.6/, "the reference simulation should converge before the selected end frame");
   assert.match(component, /cameraZoom: clamp\(current\.cameraZoom/, "scrolling the preview should control camera zoom");

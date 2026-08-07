@@ -24,6 +24,7 @@ type Settings = {
   gravity: number;
   bounce: number;
   speed: number;
+  alignSpeed: number;
   shadow: number;
   cameraYaw: number;
   cameraPitch: number;
@@ -53,6 +54,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     gravity: 100,
     bounce: 52,
     speed: 1,
+    alignSpeed: 2.4,
     shadow: 48,
     cameraYaw: 45,
     cameraPitch: 35,
@@ -70,6 +72,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     gravity: 118,
     bounce: 66,
     speed: 1.15,
+    alignSpeed: 2.8,
     shadow: 42,
     cameraYaw: 40,
     cameraPitch: 31,
@@ -87,6 +90,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     gravity: 82,
     bounce: 30,
     speed: 0.72,
+    alignSpeed: 1.6,
     shadow: 30,
     cameraYaw: 50,
     cameraPitch: 42,
@@ -383,6 +387,7 @@ function getMotion(
   gravity: number,
   bounce: number,
   speed: number,
+  alignSpeed: number,
   sequenceDuration: number,
 ) {
   const random = hash(index + 1, seed);
@@ -390,6 +395,7 @@ function getMotion(
   const gravityScale = clamp(gravity / 100, 0.4, 1.8);
   const restitution = clamp(bounce / 100, 0, 1);
   const speedScale = clamp(speed, 0.35, 1.8);
+  const alignSpeedScale = clamp(alignSpeed, 0.75, 4);
 
   // The loop begins with every cube suspended above its final grid position.
   // Seeded release timing creates the selected drop pattern without changing
@@ -409,7 +415,11 @@ function getMotion(
   const impactElapsed = Math.max(0, local - fallDuration);
   const impactTime = delay + fallDuration;
   const settleEnd = 8.6;
-  const settleProgress = clamp(impactElapsed / Math.max(0.5, settleEnd - impactTime), 0, 1);
+  // Face alignment is intentionally independent from fall speed. This lets the
+  // cubes land with the chosen physics, then rotate into the shared logo face
+  // quickly or slowly without changing their release or impact timing.
+  const alignDuration = Math.max(0.22, (settleEnd - impactTime) / alignSpeedScale);
+  const settleProgress = clamp(impactElapsed / alignDuration, 0, 1);
   const alignment = settleProgress * settleProgress * (3 - 2 * settleProgress);
   const remaining = 1 - alignment;
 
@@ -546,6 +556,7 @@ function drawScene(
         settings.gravity,
         settings.bounce,
         settings.speed,
+        settings.alignSpeed,
         settings.sequenceDuration,
       );
       const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
@@ -580,6 +591,7 @@ function drawScene(
       settings.gravity,
       settings.bounce,
       settings.speed,
+      settings.alignSpeed,
       settings.sequenceDuration,
     );
     const localVertices: Vec3[] = [
@@ -694,6 +706,7 @@ export default function WtvCubeStudio() {
     gravity: 100,
     bounce: 52,
     speed: 1,
+    alignSpeed: 2.4,
     shadow: 48,
     cameraYaw: 45,
     cameraPitch: 35,
@@ -1059,6 +1072,7 @@ export default function WtvCubeStudio() {
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
             <RangeControl label="Fall speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
+            <RangeControl label="Face align" value={settings.alignSpeed} min={0.75} max={4} step={0.05} suffix="x" onChange={(value) => updateSetting("alignSpeed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
             <div className="control-divider"><span>CAMERA</span></div>
             <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="°" onChange={(value) => updateSetting("cameraYaw", value)} />
