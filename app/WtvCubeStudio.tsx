@@ -361,8 +361,9 @@ function drawScene(
     polygon(ctx, xFace, shade(settings.cube, -0.035));
     polygon(ctx, top, shade(settings.cube, 0.105));
 
+    // The mark is a physical sticker on one local face only. The z-face corner
+    // order stays top-left to top-right, so the artwork never mirrors.
     drawMark(ctx, zFace, settings.cube, settings.ink, settings.logoText, settings.subline, logo);
-    drawMark(ctx, xFace, settings.cube, settings.ink, settings.logoText, settings.subline, logo);
   }
 
   const vignette = ctx.createRadialGradient(width * 0.5, height * 0.47, Math.min(width, height) * 0.22, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);

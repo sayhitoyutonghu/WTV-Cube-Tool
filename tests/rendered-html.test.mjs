@@ -49,6 +49,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /"16:9"|"9:16"|"1:1"/);
   assert.match(component, /image\.src = "\/wtv-logo\.png"/);
   assert.match(component, /prepareLogoSource/);
+  assert.equal(component.match(/drawMark\(/g)?.length, 2, "drawMark should have one definition and one single-face call");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
