@@ -19,6 +19,7 @@ type Vec2 = { x: number; y: number };
 type Settings = {
   density: number;
   cubeSize: number;
+  sequenceDuration: number;
   motion: number;
   gravity: number;
   bounce: number;
@@ -35,7 +36,8 @@ type Settings = {
   mode: MotionMode;
 };
 
-const DURATION = 10;
+const MAX_DURATION = 10;
+const EXPORT_FPS = 30;
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "16:9": [1280, 720],
   "9:16": [720, 1280],
@@ -46,6 +48,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
   Reference: {
     density: 7,
     cubeSize: 76,
+    sequenceDuration: 6,
     motion: 64,
     gravity: 100,
     bounce: 52,
@@ -62,6 +65,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
   Broadcast: {
     density: 6,
     cubeSize: 84,
+    sequenceDuration: 5,
     motion: 78,
     gravity: 118,
     bounce: 66,
@@ -78,6 +82,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
   Minimal: {
     density: 5,
     cubeSize: 94,
+    sequenceDuration: 7,
     motion: 34,
     gravity: 82,
     bounce: 30,
@@ -95,6 +100,12 @@ const PRESETS: Record<string, Partial<Settings>> = {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function formatTimecode(value: number) {
+  const seconds = Math.floor(value);
+  const frames = Math.floor((value % 1) * EXPORT_FPS);
+  return `${seconds.toString().padStart(2, "0")}:${frames.toString().padStart(2, "0")}`;
 }
 
 function hash(value: number, seed: number) {
@@ -372,6 +383,7 @@ function getMotion(
   gravity: number,
   bounce: number,
   speed: number,
+  sequenceDuration: number,
 ) {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
@@ -389,7 +401,10 @@ function getMotion(
   const dropHeight = 6.2 + hash(index + 8, seed) * 7.4;
   const acceleration = 7.2 * gravityScale * speedScale;
   const fallDuration = Math.sqrt((2 * dropHeight) / acceleration);
-  const local = time - delay;
+  // Sequence time compresses the same physically-shaped ten-second simulation
+  // into the selected delivery duration instead of simply cutting it off.
+  const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, 3, MAX_DURATION));
+  const local = simulationTime - delay;
   const fallProgress = clamp(local / fallDuration, 0, 1);
   const impactElapsed = Math.max(0, local - fallDuration);
   const impactTime = delay + fallDuration;
@@ -531,6 +546,7 @@ function drawScene(
         settings.gravity,
         settings.bounce,
         settings.speed,
+        settings.sequenceDuration,
       );
       const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
       const liftFade = clamp(1 / (1 + movement.lift * 0.82), 0.08, 1);
@@ -564,6 +580,7 @@ function drawScene(
       settings.gravity,
       settings.bounce,
       settings.speed,
+      settings.sequenceDuration,
     );
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
@@ -662,6 +679,7 @@ export default function WtvCubeStudio() {
   const cameraDragRef = useRef<{ pointerId: number; startX: number; startY: number; yaw: number; pitch: number } | null>(null);
   const [playing, setPlaying] = useState(true);
   const [recording, setRecording] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   const [cameraDragging, setCameraDragging] = useState(false);
   const [playhead, setPlayhead] = useState(0);
   const [aspect, setAspect] = useState<Aspect>("16:9");
@@ -671,6 +689,7 @@ export default function WtvCubeStudio() {
   const [settings, setSettings] = useState<Settings>({
     density: 7,
     cubeSize: 76,
+    sequenceDuration: 6,
     motion: 64,
     gravity: 100,
     bounce: 52,
@@ -702,7 +721,7 @@ export default function WtvCubeStudio() {
       setNotice("WTV LOGO ACTIVE");
       window.setTimeout(() => setNotice("LIVE PREVIEW"), 1000);
     };
-    image.src = "/wtv-logo.png";
+    image.src = new URL("wtv-logo.png", document.baseURI).href;
   }, []);
 
   useEffect(() => {
@@ -723,7 +742,7 @@ export default function WtvCubeStudio() {
       const delta = Math.min(0.05, (timestamp - lastFrameRef.current) / 1000);
       lastFrameRef.current = timestamp;
       if (playing) {
-        playheadRef.current = (playheadRef.current + delta) % DURATION;
+        playheadRef.current = (playheadRef.current + delta) % settings.sequenceDuration;
         if (Math.floor(timestamp / 90) !== Math.floor((timestamp - delta * 1000) / 90)) {
           setPlayhead(playheadRef.current);
         }
@@ -736,6 +755,13 @@ export default function WtvCubeStudio() {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, [playing, seed, settings]);
+
+  useEffect(() => {
+    if (playheadRef.current >= settings.sequenceDuration) {
+      playheadRef.current = 0;
+      setPlayhead(0);
+    }
+  }, [settings.sequenceDuration]);
 
   const setTimeline = (value: number) => {
     playheadRef.current = value;
@@ -793,45 +819,105 @@ export default function WtvCubeStudio() {
     setNotice("PNG SAVED");
   };
 
-  const recordVideo = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas || recording) return;
-    if (!("MediaRecorder" in window) || !canvas.captureStream) {
-      setNotice("RECORDING UNSUPPORTED");
-      return;
-    }
+  const exportMp4 = async () => {
+    if (recording) return;
+
     setRecording(true);
-    setNotice("REC 00:10");
-    setTimeline(0);
-    setPlaying(true);
-    const stream = canvas.captureStream(30);
-    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm";
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size) chunks.push(event.data);
-    };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mime });
+    setExportProgress(0);
+    setNotice("PREPARING MP4");
+
+    try {
+      const {
+        BufferTarget,
+        CanvasSource,
+        Mp4OutputFormat,
+        Output,
+        Quality,
+        canEncodeVideo,
+      } = await import("mediabunny");
+      const [width, height] = RESOLUTIONS[aspect];
+      const exportFrameCount = Math.max(1, Math.round(settings.sequenceDuration * EXPORT_FPS));
+      const quality = new Quality({
+        bitrate: width * height >= 1_000_000 ? 16_000_000 : 12_000_000,
+        bitrateMode: "variable",
+      });
+      const supported = await canEncodeVideo("avc", {
+        width,
+        height,
+        quality,
+        latencyMode: "quality",
+      });
+      if (!supported) throw new Error("This browser cannot encode H.264 MP4 video.");
+
+      // Encode from an isolated canvas so playback and camera interaction never
+      // race with export. Each frame is rendered at an exact timestamp, making
+      // every download a deterministic, frame-accurate 30 fps master.
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = width;
+      exportCanvas.height = height;
+      const target = new BufferTarget();
+      const output = new Output({
+        format: new Mp4OutputFormat({ fastStart: "in-memory" }),
+        target,
+      });
+      const videoSource = new CanvasSource(exportCanvas, {
+        codec: "avc",
+        quality,
+        keyFrameInterval: 2,
+        latencyMode: "quality",
+        alpha: "discard",
+      });
+      output.addVideoTrack(videoSource, {
+        frameRate: EXPORT_FPS,
+        maximumPacketCount: exportFrameCount,
+      });
+      output.setMetadataTags({
+        title: `WTV Cube Studio — ${aspect}`,
+        artist: "WTV",
+        comment: `Seed ${seed}; ${settings.sequenceDuration}-second fall-and-align bumper`,
+      });
+      await output.start();
+
+      for (let frame = 0; frame < exportFrameCount; frame += 1) {
+        const timestamp = frame / EXPORT_FPS;
+        drawScene(exportCanvas, settings, timestamp, seed, logoRef.current);
+        await videoSource.add(timestamp, 1 / EXPORT_FPS);
+        if (frame % 6 === 0 || frame === exportFrameCount - 1) {
+          const progress = Math.round(((frame + 1) / exportFrameCount) * 100);
+          setExportProgress(progress);
+          setNotice(`ENCODING MP4 ${progress}%`);
+          // Let React paint progress during longer portrait and square exports.
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+
+      videoSource.close();
+      await output.finalize();
+      if (!target.buffer) throw new Error("MP4 encoding finished without an output buffer.");
+
+      const blob = new Blob([target.buffer], { type: "video/mp4" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.download = `WTV-cubes-${aspect.replace(":", "x")}-${seed}.webm`;
+      link.download = `WTV-cubes-${aspect.replace(":", "x")}-${seed}.mp4`;
       link.href = url;
       link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      stream.getTracks().forEach((track) => track.stop());
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setTimeline(settings.sequenceDuration - 1 / EXPORT_FPS);
+      setNotice("MP4 SAVED");
+    } catch (error) {
+      console.error("MP4 export failed", error);
+      setNotice("MP4 EXPORT UNSUPPORTED");
+    } finally {
       setRecording(false);
-      setNotice("VIDEO SAVED");
-    };
-    recorder.start(250);
-    window.setTimeout(() => recorder.stop(), DURATION * 1000);
+      window.setTimeout(() => setNotice("LIVE PREVIEW"), 2400);
+    }
   };
 
   const dragTimeline = (event: ReactPointerEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     const update = (clientX: number) => {
       const rect = target.getBoundingClientRect();
-      setTimeline(clamp((clientX - rect.left) / rect.width, 0, 1) * DURATION);
+      setTimeline(clamp((clientX - rect.left) / rect.width, 0, 1) * settings.sequenceDuration);
     };
     update(event.clientX);
     target.setPointerCapture(event.pointerId);
@@ -880,7 +966,32 @@ export default function WtvCubeStudio() {
     setPreset("Custom");
   };
 
-  const formattedTime = useMemo(() => `${Math.floor(playhead).toString().padStart(2, "0")}:${Math.floor((playhead % 1) * 30).toString().padStart(2, "0")}`, [playhead]);
+  const controlCameraWithKeyboard = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+    const cameraKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "+", "=", "-"];
+    if (!cameraKeys.includes(event.key)) return;
+    event.preventDefault();
+    setSettings((current) => {
+      if (event.key === "ArrowLeft") return { ...current, cameraYaw: clamp(current.cameraYaw - 2, 10, 80) };
+      if (event.key === "ArrowRight") return { ...current, cameraYaw: clamp(current.cameraYaw + 2, 10, 80) };
+      if (event.key === "ArrowUp") return { ...current, cameraPitch: clamp(current.cameraPitch + 2, 12, 68) };
+      if (event.key === "ArrowDown") return { ...current, cameraPitch: clamp(current.cameraPitch - 2, 12, 68) };
+      if (event.key === "-" ) return { ...current, cameraZoom: clamp(current.cameraZoom - 4, 65, 150) };
+      return { ...current, cameraZoom: clamp(current.cameraZoom + 4, 65, 150) };
+    });
+    setPreset("Custom");
+  };
+
+  const controlTimelineWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") return setTimeline(0);
+    if (event.key === "End") return setTimeline(settings.sequenceDuration - 1 / EXPORT_FPS);
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    setTimeline(clamp(playheadRef.current + direction / EXPORT_FPS, 0, settings.sequenceDuration - 1 / EXPORT_FPS));
+  };
+
+  const formattedTime = useMemo(() => formatTimecode(playhead), [playhead]);
+  const sequenceLabel = Number.isInteger(settings.sequenceDuration) ? settings.sequenceDuration.toFixed(0) : settings.sequenceDuration.toFixed(1);
 
   return (
     <main className="studio-shell">
@@ -890,7 +1001,7 @@ export default function WtvCubeStudio() {
           <span className="brand-title">CUBE STUDIO</span>
           <span className="version">v1.0</span>
         </div>
-        <div className="top-meta"><span className="live-dot" /> RESPONSIVE BUMPER GENERATOR <span>10 SEC LOOP</span></div>
+        <div className="top-meta"><span className="live-dot" /> RESPONSIVE BUMPER GENERATOR <span>{sequenceLabel} SEC SEQUENCE</span></div>
       </header>
 
       <section className="workspace">
@@ -900,11 +1011,13 @@ export default function WtvCubeStudio() {
               ref={canvasRef}
               className={`motion-canvas${cameraDragging ? " is-dragging" : ""}`}
               aria-label="Animated WTV cube preview. Drag to orbit and scroll to zoom."
+              tabIndex={0}
               onPointerDown={startCameraDrag}
               onPointerMove={moveCamera}
               onPointerUp={endCameraDrag}
               onPointerCancel={endCameraDrag}
               onWheel={zoomCamera}
+              onKeyDown={controlCameraWithKeyboard}
             />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
             <div className="camera-hint">DRAG TO ORBIT · SCROLL TO ZOOM</div>
@@ -914,12 +1027,12 @@ export default function WtvCubeStudio() {
           <div className="transport">
             <button className="play-button" type="button" onClick={() => setPlaying((current) => !current)} aria-label={playing ? "Pause animation" : "Play animation"}>{playing ? "Ⅱ" : "▶"}</button>
             <span className="timecode">{formattedTime}</span>
-            <div className="timeline" onPointerDown={dragTimeline} role="slider" aria-label="Animation playhead" aria-valuemin={0} aria-valuemax={DURATION} aria-valuenow={playhead} tabIndex={0}>
-              <span className="timeline-fill" style={{ width: `${(playhead / DURATION) * 100}%` }} />
-              <span className="timeline-head" style={{ left: `${(playhead / DURATION) * 100}%` }} />
-              {[0, 2, 4, 6, 8, 10].map((time) => <i key={time} style={{ left: `${(time / DURATION) * 100}%` }} />)}
+            <div className="timeline" onPointerDown={dragTimeline} onKeyDown={controlTimelineWithKeyboard} role="slider" aria-label="Animation playhead" aria-valuemin={0} aria-valuemax={settings.sequenceDuration} aria-valuenow={playhead} tabIndex={0}>
+              <span className="timeline-fill" style={{ width: `${(playhead / settings.sequenceDuration) * 100}%` }} />
+              <span className="timeline-head" style={{ left: `${(playhead / settings.sequenceDuration) * 100}%` }} />
+              {[0, 1, 2, 3, 4, 5].map((tick) => <i key={tick} style={{ left: `${tick * 20}%` }} />)}
             </div>
-            <span className="timecode">10:00</span>
+            <span className="timecode">{formatTimecode(settings.sequenceDuration)}</span>
             <button className="transport-button" type="button" onClick={restart}>↺ RESET</button>
             <button className="transport-button" type="button" onClick={randomize}>✦ NEW SEED</button>
           </div>
@@ -941,6 +1054,7 @@ export default function WtvCubeStudio() {
             <RangeControl label="Density" value={settings.density} min={4} max={10} onChange={(value) => updateSetting("density", value)} />
             <RangeControl label="Cube size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
             <div className="control-divider"><span>PHYSICS</span></div>
+            <RangeControl label="Sequence time" value={settings.sequenceDuration} min={3} max={10} step={0.5} suffix=" s" onChange={(value) => updateSetting("sequenceDuration", value)} />
             <RangeControl label="Gravity" value={settings.gravity} min={45} max={170} suffix="%" onChange={(value) => updateSetting("gravity", value)} />
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
@@ -975,10 +1089,10 @@ export default function WtvCubeStudio() {
               {(["16:9", "9:16", "1:1"] as Aspect[]).map((item) => <button key={item} type="button" className={aspect === item ? "active" : ""} onClick={() => setAspect(item)}>{item}</button>)}
             </div>
             <div className="export-grid">
-              <button className="primary-action" type="button" onClick={recordVideo} disabled={recording}>{recording ? "RECORDING 10S..." : "● RECORD WEBM"}</button>
+              <button className="primary-action" type="button" onClick={exportMp4} disabled={recording} aria-describedby="export-description">{recording ? `ENCODING MP4 ${exportProgress}%` : "↓ EXPORT MP4"}</button>
               <button type="button" onClick={downloadPng}>DOWNLOAD PNG</button>
             </div>
-            <p>Video records the full 10-second fall-and-align sequence at 30 fps. Use the same seed across aspect ratios for a matched rollout system.</p>
+            <p id="export-description" aria-live="polite">MP4 exports the full {sequenceLabel}-second fall-and-align sequence at 30 fps. Use the same seed across aspect ratios for a matched rollout system.</p>
           </section>
         </aside>
       </section>
