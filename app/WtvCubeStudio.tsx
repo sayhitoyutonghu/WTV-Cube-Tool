@@ -109,6 +109,8 @@ function prepareLogoSource(image: HTMLImageElement) {
   workingContext.drawImage(image, 0, 0, width, height);
 
   const pixels = workingContext.getImageData(0, 0, width, height);
+  const cornerIndexes = [0, width - 1, (height - 1) * width, height * width - 1];
+  const hasTransparentBackground = cornerIndexes.some((pixelIndex) => pixels.data[pixelIndex * 4 + 3] < 32);
   let minX = width;
   let minY = height;
   let maxX = 0;
@@ -121,7 +123,7 @@ function prepareLogoSource(image: HTMLImageElement) {
       const blue = pixels.data[index + 2];
       const alpha = pixels.data[index + 3];
       const isWhite = red > 246 && green > 246 && blue > 246;
-      if (alpha > 8 && !isWhite) {
+      if (alpha > 8 && (hasTransparentBackground || !isWhite)) {
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
         maxX = Math.max(maxX, x);
@@ -145,16 +147,50 @@ function prepareLogoSource(image: HTMLImageElement) {
   if (!croppedContext) return working;
   croppedContext.drawImage(working, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
-  const croppedPixels = croppedContext.getImageData(0, 0, cropWidth, cropHeight);
-  for (let index = 0; index < croppedPixels.data.length; index += 4) {
-    const red = croppedPixels.data[index];
-    const green = croppedPixels.data[index + 1];
-    const blue = croppedPixels.data[index + 2];
-    const whiteness = Math.min(red, green, blue);
-    const matte = clamp((250 - whiteness) / 18, 0, 1);
-    croppedPixels.data[index + 3] = Math.round(croppedPixels.data[index + 3] * matte);
+  if (!hasTransparentBackground) {
+    const croppedPixels = croppedContext.getImageData(0, 0, cropWidth, cropHeight);
+    const pixelCount = cropWidth * cropHeight;
+    const backgroundMask = new Uint8Array(pixelCount);
+    const queue = new Int32Array(pixelCount);
+    let queueStart = 0;
+    let queueEnd = 0;
+    const isWhiteBackground = (pixelIndex: number) => {
+      const dataIndex = pixelIndex * 4;
+      return croppedPixels.data[dataIndex + 3] < 16 || (
+        croppedPixels.data[dataIndex] > 232 &&
+        croppedPixels.data[dataIndex + 1] > 232 &&
+        croppedPixels.data[dataIndex + 2] > 232
+      );
+    };
+    const enqueueBackground = (pixelIndex: number) => {
+      if (pixelIndex < 0 || pixelIndex >= pixelCount || backgroundMask[pixelIndex] || !isWhiteBackground(pixelIndex)) return;
+      backgroundMask[pixelIndex] = 1;
+      queue[queueEnd] = pixelIndex;
+      queueEnd += 1;
+    };
+
+    for (let x = 0; x < cropWidth; x += 1) {
+      enqueueBackground(x);
+      enqueueBackground((cropHeight - 1) * cropWidth + x);
+    }
+    for (let y = 0; y < cropHeight; y += 1) {
+      enqueueBackground(y * cropWidth);
+      enqueueBackground(y * cropWidth + cropWidth - 1);
+    }
+    while (queueStart < queueEnd) {
+      const pixelIndex = queue[queueStart];
+      queueStart += 1;
+      const x = pixelIndex % cropWidth;
+      if (x > 0) enqueueBackground(pixelIndex - 1);
+      if (x < cropWidth - 1) enqueueBackground(pixelIndex + 1);
+      enqueueBackground(pixelIndex - cropWidth);
+      enqueueBackground(pixelIndex + cropWidth);
+    }
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += 1) {
+      if (backgroundMask[pixelIndex]) croppedPixels.data[pixelIndex * 4 + 3] = 0;
+    }
+    croppedContext.putImageData(croppedPixels, 0, 0);
   }
-  croppedContext.putImageData(croppedPixels, 0, 0);
   return cropped;
 }
 

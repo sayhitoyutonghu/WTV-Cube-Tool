@@ -53,6 +53,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.doesNotMatch(component, /const spacing = settings\.cubeSize/, "grid spacing must not cancel the cube-size control");
   assert.match(component, /const spacing = 76 \* 1\.72/);
   assert.match(component, /ctx\.fillText\(subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
+  assert.match(component, /hasTransparentBackground/, "transparent source artwork should preserve internal white details");
+  assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
