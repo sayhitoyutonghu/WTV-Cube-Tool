@@ -72,6 +72,12 @@ const BASE_SPACING = 76 * 1.72;
 // divisor swallows the value and the constant stops doing anything at all.
 // Density and Zoom still override it.
 const FRAMING = 0.5;
+// The source bumper uses the same 45° / 35° isometric view, but its field sits
+// a touch farther from the lens. Keep that slight pull-back in the camera value
+// so the UI reports the actual reference framing and Reset restores it.
+const REFERENCE_CAMERA_YAW = 45;
+const REFERENCE_CAMERA_PITCH = 35;
+const REFERENCE_CAMERA_ZOOM = 94;
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "16:9": [1280, 720],
   "9:16": [720, 1280],
@@ -89,9 +95,9 @@ const PRESETS: Record<string, Partial<Settings>> = {
     speed: 1,
     alignSpeed: 2.4,
     shadow: 48,
-    cameraYaw: 45,
-    cameraPitch: 35,
-    cameraZoom: 100,
+    cameraYaw: REFERENCE_CAMERA_YAW,
+    cameraPitch: REFERENCE_CAMERA_PITCH,
+    cameraZoom: REFERENCE_CAMERA_ZOOM,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
@@ -324,11 +330,12 @@ function project(point: Vec3, width: number, height: number, scale: number, yawD
   };
 }
 
-// Shading envelope. Clustering the reference frames puts their darkest tone at
-// 0.73 of the brightest; the flatter -0.085/0.19 pair this replaces only reached
-// 0.82, which is what left the cubes sitting at the same value as the ground.
-const SHADE_FLOOR = -0.185;
-const SHADE_RANGE = 0.3;
+// A wrapped key prevents faces from snapping between lit and unlit as a cube
+// rolls. The reference keeps strong side-to-side separation, but the transition
+// is broad and photographic rather than a hard max(0, dot) cutoff.
+const LIGHT_WRAP = 0.16;
+const SHADE_FLOOR = -0.23;
+const SHADE_RANGE = 0.42;
 
 function polygon(
   ctx: CanvasRenderingContext2D,
@@ -352,12 +359,16 @@ function polygon(
 }
 
 function faceGradient(ctx: CanvasRenderingContext2D, points: Vec2[], color: string, lightAmount: number) {
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
-  const gradient = ctx.createLinearGradient(0, minY, 0, Math.max(minY + 1, maxY));
-  gradient.addColorStop(0, shade(color, lightAmount + 0.045));
-  gradient.addColorStop(0.48, shade(color, lightAmount));
-  gradient.addColorStop(1, shade(color, lightAmount - 0.035));
+  // Let the upper-right key drift diagonally across the face. A vertical-only
+  // ramp made every cube read as the same rigid three-colour block.
+  const gradient = ctx.createLinearGradient(maxX, minY, minX, Math.max(minY + 1, maxY));
+  gradient.addColorStop(0, shade(color, lightAmount + 0.035));
+  gradient.addColorStop(0.42, shade(color, lightAmount + 0.01));
+  gradient.addColorStop(1, shade(color, lightAmount - 0.025));
   return gradient;
 }
 
@@ -625,9 +636,9 @@ function drawScene(
   ctx.imageSmoothingQuality = "high";
 
   const background = ctx.createRadialGradient(width * 0.43, height * 0.3, 0, width * 0.52, height * 0.54, Math.max(width, height) * 0.88);
-  background.addColorStop(0, shade(settings.background, 0.115));
-  background.addColorStop(0.54, shade(settings.background, 0.025));
-  background.addColorStop(1, shade(settings.background, -0.045));
+  background.addColorStop(0, shade(settings.background, 0.085));
+  background.addColorStop(0.54, shade(settings.background, 0.018));
+  background.addColorStop(1, shade(settings.background, -0.03));
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
 
@@ -725,10 +736,12 @@ function drawScene(
     }
     ctx.restore();
   };
-  // A wide ambient pool, then a tight contact shadow that pins the cube to the
-  // ground. Both fall down-left, away from the key light at upper right.
-  drawShadowLayer(Math.max(7, half * scale * 0.24), 0.32, 1.06, 0.44, -0.32, 0.44);
-  drawShadowLayer(Math.max(2.2, half * scale * 0.075), 0.32, 0.66, 0.23, -0.09, 0.19);
+  // Three low-opacity layers reproduce the long, feathered penumbra in the
+  // bumper without a single visible ellipse edge. All fall down-left, away
+  // from the upper-right key.
+  drawShadowLayer(Math.max(11, half * scale * 0.38), 0.2, 1.32, 0.56, -0.5, 0.55);
+  drawShadowLayer(Math.max(6, half * scale * 0.2), 0.24, 1.02, 0.38, -0.3, 0.36);
+  drawShadowLayer(Math.max(2.8, half * scale * 0.09), 0.18, 0.64, 0.21, -0.08, 0.14);
 
   for (const cube of cubes) {
     const movement = getMotion(
@@ -769,7 +782,7 @@ function drawScene(
     // put the key light on the left while the cast shadows fell left as well —
     // faces lit from one side and shadowed from the same side is most of why
     // the render read as flat.
-    const lightVector = normalize({ x: 0.42, y: 1, z: -0.52 });
+    const lightVector = normalize({ x: 0.88, y: 0.68, z: -0.48 });
     const faceDefinitions = [
       // The sticker goes on x-plus, not z-plus: at a 45° yaw that is the face
       // angled to the right of screen, which is where the reference carries it.
@@ -797,7 +810,11 @@ function drawScene(
 
     for (const face of visibleFaces) {
       const points = face.indices.map((vertexIndex) => screenVertices[vertexIndex]);
-      const illumination = Math.max(0, dot(face.normal, lightVector));
+      const illumination = clamp(
+        (dot(face.normal, lightVector) + LIGHT_WRAP) / (1 + LIGHT_WRAP),
+        0,
+        1,
+      );
       const lightAmount = SHADE_FLOOR + illumination * SHADE_RANGE;
       polygon(
         ctx,
@@ -805,8 +822,8 @@ function drawScene(
         faceGradient(ctx, points, settings.cube, lightAmount),
         // A face turned away from the key gets almost no edge catch. Both faces
         // meeting at an edge stroke it, so this reads as a chamfer.
-        0.02 + illumination * 0.16,
-        0.9,
+        0.018 + illumination * 0.055,
+        0.7,
       );
       if (face.hasMark) {
         // This is the cube's one physical sticker face. Back-face culling keeps
@@ -818,7 +835,7 @@ function drawScene(
 
   const vignette = ctx.createRadialGradient(width * 0.5, height * 0.47, Math.min(width, height) * 0.22, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
   vignette.addColorStop(0, "rgba(0,0,0,0)");
-  vignette.addColorStop(1, "rgba(0,0,0,0.07)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.04)");
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, width, height);
 }
@@ -892,9 +909,9 @@ export default function WtvCubeStudio() {
     speed: 1,
     alignSpeed: 2.4,
     shadow: 48,
-    cameraYaw: 45,
-    cameraPitch: 35,
-    cameraZoom: 100,
+    cameraYaw: REFERENCE_CAMERA_YAW,
+    cameraPitch: REFERENCE_CAMERA_PITCH,
+    cameraZoom: REFERENCE_CAMERA_ZOOM,
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",

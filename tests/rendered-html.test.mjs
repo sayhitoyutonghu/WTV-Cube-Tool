@@ -67,6 +67,10 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const BASE_SPACING = 76 \* 1\.72/);
   assert.match(component, /const sublineText = subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
   assert.match(component, /subline: "MUSIC",\s+mode: "roll",/, "roll should be the default motion mode");
+  assert.match(component, /const REFERENCE_CAMERA_ZOOM = 94/, "the default camera should use the reference pull-back");
+  assert.match(component, /const REFERENCE_CAMERA_YAW = 45/, "the reference camera should keep its isometric orbit");
+  assert.match(component, /const REFERENCE_CAMERA_PITCH = 35/, "the reference camera should keep its isometric elevation");
+  assert.match(component, /const LIGHT_WRAP = 0\.16/, "rolling faces should transition through wrapped light");
   assert.match(component, /hasTransparentBackground/, "transparent source artwork should preserve internal white details");
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
   assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
