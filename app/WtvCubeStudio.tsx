@@ -521,6 +521,10 @@ function getMotion(
     const turns = Math.min(ROLL_TURNS, done + tip * tip * (3 - 2 * tip));
     const settled = Math.floor(turns);
     const partial = (turns - settled) * (Math.PI / 2);
+    // Pivoting about the leading bottom edge advances the centre by exactly one
+    // cube per quarter turn. This translation is essential to the reference:
+    // the cube rolls through the field instead of rotating in place.
+    const advance = settled + 0.5 * (1 - Math.cos(partial) + Math.sin(partial));
     // The whole field tips the same way on purpose.
     // Rolling has to turn about the marked face's own normal, or the mark swings
     // away from the camera instead of rotating on the spot. The mark sits on
@@ -531,11 +535,9 @@ function getMotion(
       rz: 0,
       lift: 0,
       offsetX: 0,
-      // Rotate as a grounded 3D object in its own cell. Moving every cube four
-      // widths through a staggered grid allowed neighbours at different phases
-      // to occupy the same volume, which read as transparent overlays. The
-      // changing contact point still makes the cube tip around its bottom edge.
-      offsetZ: 0,
+      // Measure back from the finished grid, so four physical quarter-turns
+      // carry the cube into its final lattice position with the mark upright.
+      offsetZ: (advance - ROLL_TURNS) * cubeSize,
     };
   }
 
@@ -978,7 +980,9 @@ function buildThreeScene(
   ];
   const cubeGeometry = new THREE.BoxGeometry(settings.cubeSize, settings.cubeSize, settings.cubeSize);
   const stride = columns + 3;
-  const margin = settings.mode === "roll" ? 2 : 1;
+  const margin = settings.mode === "roll"
+    ? Math.ceil((ROLL_TURNS * settings.cubeSize) / spacing) + 1
+    : 1;
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
       const index = (row + margin + 1) * stride + col + 2;
@@ -1127,7 +1131,7 @@ function drawScene(
     { x: half, y: half, z: half },
     { x: -half, y: half, z: half },
   ];
-  for (const cube of state.cubes) {
+  const cubeFrames = state.cubes.map((cube) => {
     const movement = getMotion(
       cube.index,
       cube.row,
@@ -1143,9 +1147,41 @@ function drawScene(
       settings.sequenceDuration,
       settings.cubeSize,
     );
-    const minimumLocalY = Math.min(...localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz).y));
+    const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
+    const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
     const contactHeight = -minimumLocalY + movement.lift * settings.cubeSize;
-    cube.mesh.position.set(cube.x + movement.offsetX, contactHeight, cube.z + movement.offsetZ);
+    return {
+      cube,
+      movement,
+      contactHeight,
+      centerZ: cube.z + movement.offsetZ,
+      minimumLocalZ: Math.min(...rotatedVertices.map((point) => point.z)),
+      maximumLocalZ: Math.max(...rotatedVertices.map((point) => point.z)),
+    };
+  });
+
+  // Rows of the same parity share a physical rolling lane. At staggered phases
+  // a rear cube can otherwise catch a front cube. Resolve that like a simple
+  // 3D collision constraint instead of allowing the meshes to interpenetrate.
+  const lanes = new Map<string, typeof cubeFrames>();
+  for (const frame of cubeFrames) {
+    const laneKey = `${((frame.cube.row % 2) + 2) % 2}:${frame.cube.col}`;
+    const lane = lanes.get(laneKey) ?? [];
+    lane.push(frame);
+    lanes.set(laneKey, lane);
+  }
+  for (const lane of lanes.values()) {
+    lane.sort((a, b) => b.cube.z - a.cube.z);
+    let nextMaximumZ = Number.POSITIVE_INFINITY;
+    for (const frame of lane) {
+      frame.centerZ = Math.min(frame.centerZ, nextMaximumZ - frame.maximumLocalZ);
+      nextMaximumZ = frame.centerZ + frame.minimumLocalZ - settings.cubeSize * 0.04;
+    }
+  }
+
+  for (const frame of cubeFrames) {
+    const { cube, movement } = frame;
+    cube.mesh.position.set(cube.x + movement.offsetX, frame.contactHeight, frame.centerZ);
     cube.mesh.rotation.set(movement.rx, movement.ry, movement.rz, "XYZ");
   }
 

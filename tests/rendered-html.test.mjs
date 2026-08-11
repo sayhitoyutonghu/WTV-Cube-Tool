@@ -93,7 +93,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /new THREE\.DirectionalLight/, "the 3D scene should include a shadow-casting key light");
   assert.match(component, /mesh\.castShadow = true/, "every cube should cast a physical shadow");
   assert.match(component, /ground\.receiveShadow = true/, "the modeled ground plane should receive cube shadows");
-  assert.match(component, /offsetZ: 0/, "rolling cubes should stay in their own cells instead of interpenetrating");
+  assert.match(component, /offsetZ: \(advance - ROLL_TURNS\) \* cubeSize/, "rolling cubes should translate one width per quarter turn");
+  assert.match(component, /const lanes = new Map/, "the 3D renderer should prevent rolling cubes from interpenetrating in shared lanes");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
