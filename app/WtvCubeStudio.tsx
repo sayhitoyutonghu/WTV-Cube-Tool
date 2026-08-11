@@ -12,7 +12,7 @@ import {
 } from "react";
 
 type Aspect = "16:9" | "9:16" | "1:1";
-type MotionMode = "settle" | "cascade" | "signal";
+type MotionMode = "settle" | "cascade" | "signal" | "roll";
 type Vec3 = { x: number; y: number; z: number };
 type Vec2 = { x: number; y: number };
 
@@ -39,6 +39,37 @@ type Settings = {
 
 const MAX_DURATION = 10;
 const EXPORT_FPS = 30;
+// Simulation time by which every mode has come to rest, leaving a beat of held
+// frames before the loop point.
+const SEQUENCE_END = 8.6;
+// Roll mode. Every cube tips this many quarter turns, all in one direction.
+// A multiple of four, so the mark finishes upright again.
+const ROLL_TURNS = 4;
+const ROLL_CYCLE = 1.35;
+// Fraction of a cycle spent tipping; the rest is the cube sitting still. Keep
+// it low — in the reference only a handful of cubes are moving at any instant.
+const ROLL_TIP_FRACTION = 0.35;
+// Spread of release times across the grid. Wider means fewer cubes tipping at
+// once, which is what makes the motion read as a wave crossing a settled field.
+const ROLL_STAGGER = 7;
+// Per-cube jitter on top of the diagonal wave. Without it whole diagonals tip
+// in lockstep and open a bare stripe across the field.
+const ROLL_SCATTER = 0.75;
+// Lattice pitch in cube widths while rolling. Anything under 2 lets a rolled
+// cube overlap a neighbour still sitting on its cell; past about 3 the ground
+// opens up far wider than the footage. Picked at 2.4 by rendering 2.4/2.7/3.0
+// beside a reference frame. The travel needn't divide into the pitch — the
+// field just ends on a lattice offset from where it started.
+const ROLL_SPACING = 2.4;
+// Grid pitch every mode is framed against, so switching modes never changes how
+// large a cube appears.
+const BASE_SPACING = 76 * 1.72;
+// The reference frames its rolling section far tighter than the drop modes:
+// about five cubes across the frame rather than eight. Calibrate on cube size,
+// not on mark size — the reference's mark covers roughly 45% of a cube face
+// where this one covers 74%, so matching the marks leaves the cubes about a
+// third too small. Density and Zoom still override this.
+const ROLL_FRAMING = 0.4;
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "16:9": [1280, 720],
   "9:16": [720, 1280],
@@ -294,7 +325,19 @@ function project(point: Vec3, width: number, height: number, scale: number, yawD
   };
 }
 
-function polygon(ctx: CanvasRenderingContext2D, points: Vec2[], fill: string | CanvasGradient, edgeAlpha = 0.055) {
+// Shading envelope. Clustering the reference frames puts their darkest tone at
+// 0.73 of the brightest; the flatter -0.085/0.19 pair this replaces only reached
+// 0.82, which is what left the cubes sitting at the same value as the ground.
+const SHADE_FLOOR = -0.185;
+const SHADE_RANGE = 0.3;
+
+function polygon(
+  ctx: CanvasRenderingContext2D,
+  points: Vec2[],
+  fill: string | CanvasGradient,
+  edgeAlpha = 0.055,
+  edgeWidth = 0.65,
+) {
   ctx.beginPath();
   ctx.moveTo(points[0].x, points[0].y);
   for (let index = 1; index < points.length; index += 1) {
@@ -303,8 +346,9 @@ function polygon(ctx: CanvasRenderingContext2D, points: Vec2[], fill: string | C
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
-  ctx.strokeStyle = `rgba(255, 255, 255, ${edgeAlpha})`;
-  ctx.lineWidth = 0.65;
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = `rgba(255, 250, 214, ${edgeAlpha})`;
+  ctx.lineWidth = edgeWidth;
   ctx.stroke();
 }
 
@@ -429,6 +473,7 @@ function getMotion(
   speed: number,
   alignSpeed: number,
   sequenceDuration: number,
+  cubeSize: number,
 ) {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
@@ -436,6 +481,59 @@ function getMotion(
   const restitution = clamp(bounce / 100, 0, 1);
   const speedScale = clamp(speed, 0.35, 1.8);
   const alignSpeedScale = clamp(alignSpeed, 0.75, 4);
+  // Sequence time compresses the same physically-shaped ten-second simulation
+  // into the selected delivery duration instead of simply cutting it off.
+  const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, 3, MAX_DURATION));
+
+  if (mode === "roll") {
+    // The reference tips its cubes about a bottom edge rather than dropping
+    // them: the marked face keeps pointing at the camera and the mark turns 90°
+    // per tip, which is what rotating about that face's own normal does. Most
+    // cubes are still at any instant, so each quarter turn is a short tip
+    // followed by a long pause, and the phase is offset across the grid so the
+    // tipping reads as a wave rolling through a settled field.
+    // Columns run negative on the run-up side, so fold the phase back into
+    // [0,1) rather than letting those cubes start before the sequence does.
+    const stagger = (((col * 0.64 + row * 0.31 + random * ROLL_SCATTER) % 1) + 1) % 1;
+    // Face align tightens the wave here rather than reorienting cubes, since a
+    // rolling cube is always already square to the grid.
+    const start = (stagger * ROLL_STAGGER) / alignSpeedScale;
+    const cycle = ROLL_CYCLE / speedScale;
+    // Every cube rolls one way and keeps going, as the footage does. Rolling out
+    // and back reads as cubes tipping in both directions, which is wrong.
+    const local = clamp(simulationTime - start, 0, ROLL_TURNS * cycle);
+    const progress = local / cycle;
+    const done = Math.floor(progress);
+    const tip = clamp((progress - done) / ROLL_TIP_FRACTION, 0, 1);
+    // A tipping cube passes its balance point and falls onto the next face, so
+    // it accelerates through the turn rather than drifting into it.
+    const turns = Math.min(ROLL_TURNS, done + tip * tip * (3 - 2 * tip));
+    const settled = Math.floor(turns);
+    const partial = (turns - settled) * (Math.PI / 2);
+    // Pivoting about the leading bottom edge advances the centre by exactly one
+    // cube per quarter turn. The renderer re-seats each cube on its lowest
+    // vertex, so the rise and fall over the edge falls out of the rotation.
+    const advance = settled + 0.5 * (1 - Math.cos(partial) + Math.sin(partial));
+    // The whole field tips the same way on purpose. Opposed neighbours roll into
+    // each other and interpenetrate, because a quarter turn covers a full cube
+    // width — which is also why ROLL_SPACING has to hold the lattice open.
+    //
+    // Rolling has to turn about the marked face's own normal, or the mark swings
+    // away from the camera instead of rotating on the spot. The mark sits on
+    // x-plus, so that axis is x and the cube travels along z.
+    return {
+      rx: turns * (Math.PI / 2),
+      ry: 0,
+      rz: 0,
+      lift: 0,
+      offsetX: 0,
+      // Measured back from the finished grid, so the closing frame lands on the
+      // lattice with the mark upright. The travel is not a whole number of
+      // pitches, so the opening frame is that lattice shifted — still a lattice,
+      // which is all the framing needs.
+      offsetZ: (advance - ROLL_TURNS) * cubeSize,
+    };
+  }
 
   // The loop begins with every cube suspended above its final grid position.
   // Seeded release timing creates the selected drop pattern without changing
@@ -447,14 +545,11 @@ function getMotion(
   const dropHeight = 6.2 + hash(index + 8, seed) * 7.4;
   const acceleration = 7.2 * gravityScale * speedScale;
   const fallDuration = Math.sqrt((2 * dropHeight) / acceleration);
-  // Sequence time compresses the same physically-shaped ten-second simulation
-  // into the selected delivery duration instead of simply cutting it off.
-  const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, 3, MAX_DURATION));
   const local = simulationTime - delay;
   const fallProgress = clamp(local / fallDuration, 0, 1);
   const impactElapsed = Math.max(0, local - fallDuration);
   const impactTime = delay + fallDuration;
-  const settleEnd = 8.6;
+  const settleEnd = SEQUENCE_END;
   // Face alignment is intentionally independent from fall speed. This lets the
   // cubes land with the chosen physics, then rotate into the shared logo face
   // quickly or slowly without changing their release or impact timing.
@@ -555,8 +650,18 @@ function drawScene(
   const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
   // Keep the grid footprint stable so cube size remains an independent visual
   // control in every aspect ratio instead of cancelling out through auto-fit.
-  const spacing = 76 * 1.72;
-  const extent = Math.max(columns, rows) * spacing;
+  // A quarter turn carries a cube a full cube width, so a rolled cube lands on
+  // top of a neighbour that has not moved yet unless the lattice is more than
+  // two cubes wide. Framing compensates, so the field reads the same size.
+  const spacing = settings.mode === "roll"
+    ? Math.max(BASE_SPACING, settings.cubeSize * ROLL_SPACING)
+    : BASE_SPACING;
+  // Frame from the base pitch, never the rolling one. Deriving the camera from
+  // the widened lattice pulls it back and halves the cubes on screen; measured
+  // against the reference footage they should stay the size the other modes
+  // render them, with the wider pitch simply showing fewer of them.
+  const extent = Math.max(columns, rows) * BASE_SPACING
+    * (settings.mode === "roll" ? ROLL_FRAMING : 1);
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
   const scale = Math.min(width, height) / Math.max(420, extent * extentFactor) * (settings.cameraZoom / 100);
   const half = settings.cubeSize / 2;
@@ -565,9 +670,16 @@ function drawScene(
   const projectPoint = (point: Vec3) => project(point, width, height, scale, settings.cameraYaw, settings.cameraPitch);
   const cubes: Array<{ index: number; row: number; col: number; x: number; z: number; depth: number }> = [];
 
-  for (let row = -1; row <= rows; row += 1) {
+  // Mid-roll a cube sits up to ROLL_TURNS cubes along z from its cell, baring
+  // the edge it rolled off. Extra rows on both sides cover that.
+  const runUp = settings.mode === "roll"
+    ? Math.ceil((ROLL_TURNS * settings.cubeSize) / spacing) + 1
+    : 0;
+  const stride = columns + 3;
+
+  for (let row = -1 - runUp; row <= rows + runUp; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
-      const index = (row + 2) * (columns + 3) + col + 2;
+      const index = (row + 2 + runUp) * stride + col + 2;
       const offset = row % 2 === 0 ? 0 : spacing * 0.5;
       const x = (col - (columns - 1) / 2) * spacing + offset;
       const z = (row - (rows - 1) / 2) * spacing;
@@ -598,6 +710,7 @@ function drawScene(
         settings.speed,
         settings.alignSpeed,
         settings.sequenceDuration,
+        settings.cubeSize,
       );
       const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
       const liftFade = clamp(1 / (1 + movement.lift * 0.82), 0.08, 1);
@@ -616,8 +729,10 @@ function drawScene(
     }
     ctx.restore();
   };
-  drawShadowLayer(Math.max(7, half * scale * 0.24), 0.24, 1.02, 0.42, -0.3, 0.42);
-  drawShadowLayer(Math.max(2.2, half * scale * 0.075), 0.2, 0.68, 0.24, -0.08, 0.18);
+  // A wide ambient pool, then a tight contact shadow that pins the cube to the
+  // ground. Both fall down-left, away from the key light at upper right.
+  drawShadowLayer(Math.max(7, half * scale * 0.24), 0.32, 1.06, 0.44, -0.32, 0.44);
+  drawShadowLayer(Math.max(2.2, half * scale * 0.075), 0.32, 0.66, 0.23, -0.09, 0.19);
 
   for (const cube of cubes) {
     const movement = getMotion(
@@ -633,6 +748,7 @@ function drawScene(
       settings.speed,
       settings.alignSpeed,
       settings.sequenceDuration,
+      settings.cubeSize,
     );
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
@@ -653,10 +769,19 @@ function drawScene(
       z: point.z + cube.z + movement.offsetZ,
     }));
     const screenVertices = worldVertices.map(projectPoint);
-    const lightVector = normalize({ x: -0.42, y: 1, z: -0.52 });
+    // Upper right, as in the reference. The x sign used to be negative, which
+    // put the key light on the left while the cast shadows fell left as well —
+    // faces lit from one side and shadowed from the same side is most of why
+    // the render read as flat.
+    const lightVector = normalize({ x: 0.42, y: 1, z: -0.52 });
     const faceDefinitions = [
-      { id: "z-plus", indices: [3, 2, 6, 7], hasMark: true },
-      { id: "x-plus", indices: [1, 5, 6, 2], hasMark: false },
+      // The sticker goes on x-plus, not z-plus: at a 45° yaw that is the face
+      // angled to the right of screen, which is where the reference carries it.
+      { id: "z-plus", indices: [3, 2, 6, 7], hasMark: false },
+      // Wound bottom-left, bottom-right, top-right, top-left like the other
+      // marked face was, or drawMark maps the artwork onto its side. Screen
+      // left on this face is +z, since isoX goes as (x − z) at a 45° yaw.
+      { id: "x-plus", indices: [2, 1, 5, 6], hasMark: true },
       { id: "top", indices: [4, 7, 6, 5], hasMark: false },
       { id: "z-minus", indices: [0, 4, 5, 1], hasMark: false },
       { id: "x-minus", indices: [0, 3, 7, 4], hasMark: false },
@@ -677,8 +802,16 @@ function drawScene(
     for (const face of visibleFaces) {
       const points = face.indices.map((vertexIndex) => screenVertices[vertexIndex]);
       const illumination = Math.max(0, dot(face.normal, lightVector));
-      const lightAmount = -0.085 + illumination * 0.19;
-      polygon(ctx, points, faceGradient(ctx, points, settings.cube, lightAmount));
+      const lightAmount = SHADE_FLOOR + illumination * SHADE_RANGE;
+      polygon(
+        ctx,
+        points,
+        faceGradient(ctx, points, settings.cube, lightAmount),
+        // A face turned away from the key gets almost no edge catch. Both faces
+        // meeting at an edge stroke it, so this reads as a chamfer.
+        0.02 + illumination * 0.16,
+        0.9,
+      );
       if (face.hasMark) {
         // This is the cube's one physical sticker face. Back-face culling keeps
         // the artwork correctly oriented instead of mirroring it on another side.
@@ -1119,8 +1252,8 @@ export default function WtvCubeStudio() {
             <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
             <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
             <p className="camera-help">Drag directly on the preview to orbit. Scroll to zoom.</p>
-            <div className="segmented three">
-              {(["settle", "cascade", "signal"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode === "signal" ? "wave" : mode}</button>)}
+            <div className="segmented four">
+              {(["settle", "cascade", "signal", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode === "signal" ? "wave" : mode}</button>)}
             </div>
           </section>
 

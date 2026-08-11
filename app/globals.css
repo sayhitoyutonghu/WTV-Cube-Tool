@@ -178,6 +178,7 @@ button { color: inherit; }
 .section-heading small { font: 700 9px/1 "Courier New", monospace; background: var(--yellow); padding: 5px 7px 4px; }
 
 .preset-grid, .segmented { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 16px; }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
 .preset-grid button, .segmented button {
   min-height: 34px;
   border: 1px solid var(--ink);
