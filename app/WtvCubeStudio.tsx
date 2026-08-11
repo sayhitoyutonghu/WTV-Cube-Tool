@@ -965,7 +965,10 @@ function buildThreeScene(
     metalness: 0,
   });
   const markedMaterial = new THREE.MeshStandardMaterial({
-    color: settings.cube,
+    // The canvas texture already contains the selected cube colour underneath
+    // the transparent PNG. Keep the material multiplier white; tinting it with
+    // settings.cube again would multiply the yellow twice and darken this face.
+    color: "#ffffff",
     map: brandTexture,
     roughness: 0.92,
     metalness: 0,

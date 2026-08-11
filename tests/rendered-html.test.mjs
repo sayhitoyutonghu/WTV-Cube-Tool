@@ -91,6 +91,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /THREE\.VSMShadowMap/, "the 3D scene should use soft variance shadow maps");
   assert.match(component, /new THREE\.HemisphereLight/, "the 3D scene should include environment light");
   assert.match(component, /new THREE\.DirectionalLight/, "the 3D scene should include a shadow-casting key light");
+  assert.match(component, /const markedMaterial[\s\S]*?color: "#ffffff"/, "the logo texture should not multiply the selected cube colour twice");
   assert.match(component, /mesh\.castShadow = true/, "every cube should cast a physical shadow");
   assert.match(component, /ground\.receiveShadow = true/, "the modeled ground plane should receive cube shadows");
   assert.match(component, /offsetZ: \(advance - ROLL_TURNS\) \* cubeSize/, "rolling cubes should translate one width per quarter turn");
