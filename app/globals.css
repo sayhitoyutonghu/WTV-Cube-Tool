@@ -1,4 +1,13 @@
 :root {
+  /* Panel type scale. The panel used to run at 8-9px, which is below what is
+     comfortably readable; these are set against the reference UI, which uses
+     24px section headings and 13px for labels and values. */
+  --ui-xs: 11px;
+  --ui-sm: 12px;
+  --ui-md: 13px;
+  --ui-lg: 15px;
+  --ui-heading: 20px;
+
   --paper: #e8e7e1;
   --ink: #111111;
   --panel: #f5f4ee;
@@ -60,7 +69,7 @@ button { color: inherit; }
   font: 700 9px/1 Arial, sans-serif;
 }
 
-.top-meta { display: flex; align-items: center; gap: 14px; padding: 0 18px; font: 700 10px/1.2 "Courier New", monospace; letter-spacing: 0.05em; }
+.top-meta { display: flex; align-items: center; gap: 14px; padding: 0 18px; font: 700 var(--ui-sm)/1.2 "Courier New", monospace; letter-spacing: 0.05em; }
 .top-meta > span:last-child { padding-left: 14px; border-left: 1px solid var(--line); }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff3b30; box-shadow: 0 0 0 3px rgba(255,59,48,.12); }
 
@@ -113,7 +122,7 @@ button { color: inherit; }
   color: rgba(255,255,255,.68);
   mix-blend-mode: difference;
   pointer-events: none;
-  font: 700 9px/1 "Courier New", monospace;
+  font: 700 var(--ui-xs)/1 "Courier New", monospace;
   letter-spacing: .08em;
 }
 .stage-overlay-top { top: 18px; }
@@ -129,7 +138,7 @@ button { color: inherit; }
   color: rgba(255,255,255,.74);
   backdrop-filter: blur(8px);
   pointer-events: none;
-  font: 700 8px/1 "Courier New", monospace;
+  font: 700 var(--ui-xs)/1 "Courier New", monospace;
   letter-spacing: .08em;
   opacity: .72;
 }
@@ -153,9 +162,9 @@ button { color: inherit; }
   cursor: pointer;
 }
 .play-button { width: 44px; font-size: 15px; }
-.transport-button { padding: 0 12px; font: 700 9px/1 "Courier New", monospace; letter-spacing: .04em; }
+.transport-button { padding: 0 14px; font: 700 var(--ui-sm)/1 "Courier New", monospace; letter-spacing: .04em; }
 .play-button:hover, .transport-button:hover { background: rgba(255,255,255,.1); }
-.timecode { font: 700 10px/1 "Courier New", monospace; color: rgba(255,255,255,.65); }
+.timecode { font: 700 var(--ui-md)/1 "Courier New", monospace; color: rgba(255,255,255,.65); }
 
 .timeline { height: 28px; position: relative; cursor: ew-resize; touch-action: none; }
 .timeline::before { content: ""; position: absolute; left: 0; right: 0; top: 13px; height: 2px; background: rgba(255,255,255,.22); }
@@ -170,22 +179,22 @@ button { color: inherit; }
   border-left: 1px solid var(--ink);
 }
 
-.panel-section { padding: 18px 20px 20px; border-bottom: 1px solid var(--ink); }
+.panel-section { padding: 24px 22px 26px; border-bottom: 1px solid var(--ink); }
 
-.section-heading { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; margin-bottom: 16px; }
-.section-heading > span { font: 700 10px/1 "Courier New", monospace; color: rgba(17,17,17,.5); }
-.section-heading h2 { margin: 0; font-size: 12px; letter-spacing: .065em; }
-.section-heading small { font: 700 9px/1 "Courier New", monospace; background: var(--yellow); padding: 5px 7px 4px; }
+.section-heading { display: grid; grid-template-columns: 30px 1fr auto; align-items: baseline; margin-bottom: 20px; }
+.section-heading > span { font: 700 var(--ui-sm)/1 "Courier New", monospace; color: rgba(17,17,17,.5); }
+.section-heading h2 { margin: 0; font-size: var(--ui-heading); letter-spacing: .01em; }
+.section-heading small { font: 700 var(--ui-xs)/1 "Courier New", monospace; background: var(--yellow); padding: 6px 8px 5px; }
 
 .preset-grid, .segmented { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 16px; }
-.segmented.four { grid-template-columns: repeat(4, 1fr); }
+.segmented.two { grid-template-columns: repeat(2, 1fr); }
 .preset-grid button, .segmented button {
-  min-height: 34px;
+  min-height: 42px;
   border: 1px solid var(--ink);
   border-right-width: 0;
   background: transparent;
   cursor: pointer;
-  font: 700 9px/1 "Courier New", monospace;
+  font: 700 var(--ui-sm)/1 "Courier New", monospace;
   text-transform: uppercase;
 }
 .preset-grid button:last-child, .segmented button:last-child { border-right-width: 1px; }
@@ -195,20 +204,20 @@ button { color: inherit; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font: 700 10px/1.2 "Courier New", monospace;
+  font: 700 var(--ui-md)/1.2 "Courier New", monospace;
 }
-.color-control { height: 34px; border-top: 1px solid var(--line); }
+.color-control { height: 42px; border-top: 1px solid var(--line); }
 .color-control:last-child { border-bottom: 1px solid var(--line); }
 .color-value { display: flex; align-items: center; gap: 8px; color: rgba(17,17,17,.58); }
 input[type="color"] { appearance: none; width: 23px; height: 23px; border: 1px solid var(--ink); padding: 0; background: transparent; cursor: pointer; }
 input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
 input[type="color"]::-webkit-color-swatch { border: 0; }
 
-.range-control { display: block; margin: 13px 0; }
+.range-control { display: block; margin: 18px 0; }
 .control-label output { color: rgba(17,17,17,.55); }
-.control-divider { display: flex; align-items: center; gap: 8px; margin: 18px 0 5px; color: rgba(17,17,17,.48); font: 700 9px/1 "Courier New", monospace; letter-spacing: .08em; }
+.control-divider { display: flex; align-items: center; gap: 9px; margin: 24px 0 8px; color: rgba(17,17,17,.48); font: 700 var(--ui-xs)/1 "Courier New", monospace; letter-spacing: .08em; }
 .control-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
-.camera-help { margin: -2px 0 13px; color: rgba(17,17,17,.5); font: 400 8px/1.4 "Courier New", monospace; }
+.camera-help { margin: 0 0 16px; color: rgba(17,17,17,.5); font: 400 var(--ui-xs)/1.5 "Courier New", monospace; }
 input[type="range"] {
   --range-fill: 50%;
   appearance: none;
@@ -221,8 +230,8 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; border: 2px solid var(--panel); border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 
 .text-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.text-grid label { display: grid; gap: 6px; font: 700 9px/1 "Courier New", monospace; color: rgba(17,17,17,.55); }
-.text-grid input { width: 100%; height: 38px; border: 1px solid var(--ink); background: #fff; padding: 0 10px; color: var(--ink); font-weight: 900; }
+.text-grid label { display: grid; gap: 8px; font: 700 var(--ui-sm)/1 "Courier New", monospace; color: rgba(17,17,17,.55); }
+.text-grid input { width: 100%; height: 44px; font-size: var(--ui-lg); border: 1px solid var(--ink); background: #fff; padding: 0 10px; color: var(--ink); font-weight: 900; }
 /* Only the mark is uppercased when it is drawn, so only its field may display
    caps. The subline is drawn verbatim, and transforming it here would show a
    value the render never produces. */
@@ -233,11 +242,11 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .upload-row button, .upload-button, .export-grid button {
   display: grid;
   place-items: center;
-  min-height: 38px;
+  min-height: 44px;
   border: 1px solid var(--ink);
   background: transparent;
   cursor: pointer;
-  font: 700 9px/1 "Courier New", monospace;
+  font: 700 var(--ui-sm)/1 "Courier New", monospace;
 }
 .upload-button input { position: absolute; opacity: 0; pointer-events: none; }
 .upload-row button:hover, .upload-button:hover, .export-grid button:hover { background: #fff; }
@@ -246,7 +255,7 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 10px; heigh
 .export-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; }
 .export-grid .primary-action { background: var(--yellow); font-weight: 900; }
 .export-grid button:disabled { cursor: wait; opacity: .68; }
-.export-section p { margin: 12px 0 0; color: rgba(17,17,17,.56); font: 400 9px/1.45 "Courier New", monospace; }
+.export-section p { margin: 14px 0 0; color: rgba(17,17,17,.56); font: 400 var(--ui-xs)/1.55 "Courier New", monospace; }
 
 @media (max-width: 960px) {
   .studio-shell { grid-template-rows: auto 1fr; }

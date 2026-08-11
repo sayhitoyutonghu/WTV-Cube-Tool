@@ -12,7 +12,7 @@ import {
 } from "react";
 
 type Aspect = "16:9" | "9:16" | "1:1";
-type MotionMode = "settle" | "cascade" | "signal" | "roll";
+type MotionMode = "settle" | "roll";
 type Vec3 = { x: number; y: number; z: number };
 type Vec2 = { x: number; y: number };
 
@@ -64,7 +64,7 @@ const ROLL_SPACING = 2.4;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
 const BASE_SPACING = 76 * 1.72;
-// The reference frames its rolling section far tighter than the drop modes:
+// The reference frames its rolling section far tighter than drop mode does:
 // about five cubes across the frame rather than eight. Calibrate on cube size,
 // not on mark size — the reference's mark covers roughly 45% of a cube face
 // where this one covers 74%, so matching the marks leaves the cubes about a
@@ -111,7 +111,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     background: "#08a8df",
     cube: "#fff348",
     ink: "#111111",
-    mode: "cascade",
+    mode: "settle",
   },
   Minimal: {
     density: 5,
@@ -129,7 +129,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     background: "#f0eee6",
     cube: "#ff493d",
     ink: "#111111",
-    mode: "signal",
+    mode: "settle",
   },
 };
 
@@ -539,8 +539,6 @@ function getMotion(
   // Seeded release timing creates the selected drop pattern without changing
   // the deterministic, perfectly aligned end frame.
   let delay = 0.08 + random * 1.2;
-  if (mode === "cascade") delay = Math.max(0.05, (row + 1) * 0.12 + (col + 1) * 0.055 + random * 0.18);
-  if (mode === "signal") delay = Math.abs((row + col) % 4) * 0.28 + random * 0.22 + 0.05;
 
   const dropHeight = 6.2 + hash(index + 8, seed) * 7.4;
   const acceleration = 7.2 * gravityScale * speedScale;
@@ -1252,8 +1250,8 @@ export default function WtvCubeStudio() {
             <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
             <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
             <p className="camera-help">Drag directly on the preview to orbit. Scroll to zoom.</p>
-            <div className="segmented four">
-              {(["settle", "cascade", "signal", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode === "signal" ? "wave" : mode}</button>)}
+            <div className="segmented two">
+              {(["settle", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode}</button>)}
             </div>
           </section>
 
