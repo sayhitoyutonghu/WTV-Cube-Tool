@@ -1127,7 +1127,7 @@ export default function WtvCubeStudio() {
           <section className="panel-section">
             <div className="section-heading"><span>03</span><h2>BRAND</h2></div>
             <div className="text-grid">
-              <label><span>Mark</span><input value={settings.logoText} maxLength={4} onChange={(event) => updateSetting("logoText", event.target.value)} /></label>
+              <label><span>Mark</span><input className="caps" value={settings.logoText} maxLength={4} onChange={(event) => updateSetting("logoText", event.target.value)} /></label>
               <label><span>Type / subline</span><input value={settings.subline} maxLength={12} onChange={(event) => updateSetting("subline", event.target.value)} /></label>
             </div>
             <div className="upload-row three">
