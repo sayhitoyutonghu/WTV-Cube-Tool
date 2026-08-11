@@ -26,17 +26,17 @@ test("server-renders the WTV Cube Studio controls", async () => {
   const html = await response.text();
   assert.match(html, /<title>WTV Cube Studio<\/title>/i);
   assert.match(html, /CUBE STUDIO/);
-  assert.match(html, /RESPONSIVE BUMPER GENERATOR/);
+  assert.match(html, /Responsive bumper generator/i);
   assert.match(html, /Animated WTV cube preview/);
-  assert.match(html, /EXPORT MP4/);
+  assert.match(html, /Export MP4/i);
   assert.doesNotMatch(html, /WEBM/i);
-  assert.match(html, /DOWNLOAD PNG/);
+  assert.match(html, /Download PNG/i);
   assert.match(html, /Orbit/);
   assert.match(html, /Elevation/);
   assert.match(html, /Zoom/);
   assert.match(html, /Gravity/);
   assert.match(html, /Bounce/);
-  assert.match(html, /SEC SEQUENCE/);
+  assert.match(html, /sec sequence/i);
   assert.match(html, /Sequence time/);
   assert.match(html, /og:image/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
@@ -62,7 +62,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /"16:9"|"9:16"|"1:1"/);
   assert.match(component, /new URL\("wtv-logo\.png", document\.baseURI\)\.href/);
   assert.match(component, /prepareLogoSource/);
-  assert.equal(component.match(/drawMark\(/g)?.length, 2, "drawMark should have one definition and one single-face call");
+  assert.equal(component.match(/drawMark\(/g)?.length, 3, "drawMark should feed the 3D face texture and remain available to the legacy fallback");
   assert.doesNotMatch(component, /const spacing = settings\.cubeSize/, "grid spacing must not cancel the cube-size control");
   assert.match(component, /const BASE_SPACING = 76 \* 1\.72/);
   assert.match(component, /const sublineText = subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
@@ -87,10 +87,13 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /onPointerMove=\{moveCamera\}/, "dragging the preview should orbit the camera");
   assert.doesNotMatch(component, /time \* settings\.speed/, "speed should shape gravity without preventing the fixed ten-second convergence");
   assert.match(component, /minimumLocalY/, "rotating cubes should maintain physical ground contact");
-  assert.match(component, /drawProjectedShadow/, "rendering should include directional projected shadows");
-  assert.doesNotMatch(component, /ctx\.ellipse\(/, "cast shadows should retain the cube footprint instead of becoming ellipses");
-  assert.doesNotMatch(component, /grainIndex|const vignette/, "the matte reference floor should not contain artificial grain or a vignette");
-  assert.match(component, /visibleFaces/, "tumbling cubes should use camera-aware face rendering");
+  assert.match(component, /new THREE\.WebGLRenderer/, "the preview should be rendered as a real 3D scene");
+  assert.match(component, /THREE\.VSMShadowMap/, "the 3D scene should use soft variance shadow maps");
+  assert.match(component, /new THREE\.HemisphereLight/, "the 3D scene should include environment light");
+  assert.match(component, /new THREE\.DirectionalLight/, "the 3D scene should include a shadow-casting key light");
+  assert.match(component, /mesh\.castShadow = true/, "every cube should cast a physical shadow");
+  assert.match(component, /ground\.receiveShadow = true/, "the modeled ground plane should receive cube shadows");
+  assert.match(component, /offsetZ: 0/, "rolling cubes should stay in their own cells instead of interpenetrating");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));

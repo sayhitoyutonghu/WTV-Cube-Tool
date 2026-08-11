@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import * as THREE from "three";
 
 type Aspect = "16:9" | "9:16" | "1:1";
 type MotionMode = "settle" | "roll";
@@ -520,14 +521,7 @@ function getMotion(
     const turns = Math.min(ROLL_TURNS, done + tip * tip * (3 - 2 * tip));
     const settled = Math.floor(turns);
     const partial = (turns - settled) * (Math.PI / 2);
-    // Pivoting about the leading bottom edge advances the centre by exactly one
-    // cube per quarter turn. The renderer re-seats each cube on its lowest
-    // vertex, so the rise and fall over the edge falls out of the rotation.
-    const advance = settled + 0.5 * (1 - Math.cos(partial) + Math.sin(partial));
-    // The whole field tips the same way on purpose. Opposed neighbours roll into
-    // each other and interpenetrate, because a quarter turn covers a full cube
-    // width — which is also why ROLL_SPACING has to hold the lattice open.
-    //
+    // The whole field tips the same way on purpose.
     // Rolling has to turn about the marked face's own normal, or the mark swings
     // away from the camera instead of rotating on the spot. The mark sits on
     // x-plus, so that axis is x and the cube travels along z.
@@ -537,11 +531,11 @@ function getMotion(
       rz: 0,
       lift: 0,
       offsetX: 0,
-      // Measured back from the finished grid, so the closing frame lands on the
-      // lattice with the mark upright. The travel is not a whole number of
-      // pitches, so the opening frame is that lattice shifted — still a lattice,
-      // which is all the framing needs.
-      offsetZ: (advance - ROLL_TURNS) * cubeSize,
+      // Rotate as a grounded 3D object in its own cell. Moving every cube four
+      // widths through a staggered grid allowed neighbours at different phases
+      // to occupy the same volume, which read as transparent overlays. The
+      // changing contact point still makes the cube tip around its bottom edge.
+      offsetZ: 0,
     };
   }
 
@@ -621,7 +615,7 @@ function getMotion(
   };
 }
 
-function drawScene(
+function drawScene2dLegacy(
   canvas: HTMLCanvasElement,
   settings: Settings,
   time: number,
@@ -855,6 +849,311 @@ function drawScene(
     }
   }
 
+}
+
+type ThreeCube = {
+  index: number;
+  row: number;
+  col: number;
+  x: number;
+  z: number;
+  mesh: THREE.Mesh<THREE.BoxGeometry, THREE.Material[]>;
+};
+
+type ThreeSceneState = {
+  renderer: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.OrthographicCamera;
+  cubes: ThreeCube[];
+  cubeGeometry: THREE.BoxGeometry | null;
+  cubeMaterials: THREE.Material[];
+  brandTexture: THREE.CanvasTexture | null;
+  groundGeometry: THREE.PlaneGeometry | null;
+  groundMaterial: THREE.MeshStandardMaterial | null;
+  keyLight: THREE.DirectionalLight | null;
+  ambientLight: THREE.AmbientLight | null;
+  hemisphereLight: THREE.HemisphereLight | null;
+  structureKey: string;
+  extent: number;
+};
+
+const threeScenes = new WeakMap<HTMLCanvasElement, ThreeSceneState>();
+const logoIds = new WeakMap<HTMLCanvasElement, number>();
+let nextLogoId = 1;
+
+function logoIdentity(logo: HTMLCanvasElement | null) {
+  if (!logo) return 0;
+  let id = logoIds.get(logo);
+  if (!id) {
+    id = nextLogoId;
+    nextLogoId += 1;
+    logoIds.set(logo, id);
+  }
+  return id;
+}
+
+function createBrandTexture(settings: Settings, logo: HTMLCanvasElement | null) {
+  const surface = document.createElement("canvas");
+  surface.width = 512;
+  surface.height = 512;
+  const context = surface.getContext("2d");
+  if (!context) return null;
+  context.fillStyle = settings.cube;
+  context.fillRect(0, 0, surface.width, surface.height);
+  drawMark(
+    context,
+    [
+      { x: 0, y: surface.height },
+      { x: surface.width, y: surface.height },
+      { x: surface.width, y: 0 },
+      { x: 0, y: 0 },
+    ],
+    settings.cube,
+    settings.ink,
+    settings.logoText,
+    settings.subline,
+    logo,
+  );
+  const texture = new THREE.CanvasTexture(surface);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function clearThreeScene(state: ThreeSceneState) {
+  state.scene.clear();
+  state.cubeGeometry?.dispose();
+  state.cubeMaterials.forEach((material) => material.dispose());
+  state.brandTexture?.dispose();
+  state.groundGeometry?.dispose();
+  state.groundMaterial?.dispose();
+  state.cubes = [];
+  state.cubeGeometry = null;
+  state.cubeMaterials = [];
+  state.brandTexture = null;
+  state.groundGeometry = null;
+  state.groundMaterial = null;
+  state.keyLight = null;
+  state.ambientLight = null;
+  state.hemisphereLight = null;
+}
+
+function buildThreeScene(
+  state: ThreeSceneState,
+  canvas: HTMLCanvasElement,
+  settings: Settings,
+  logo: HTMLCanvasElement | null,
+) {
+  clearThreeScene(state);
+  const width = canvas.width;
+  const height = canvas.height;
+  const aspect = width / height;
+  const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
+  const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
+  const spacing = settings.mode === "roll"
+    ? Math.max(BASE_SPACING, settings.cubeSize * ROLL_SPACING)
+    : BASE_SPACING;
+  state.extent = Math.max(columns, rows) * BASE_SPACING * FRAMING;
+
+  const brandTexture = createBrandTexture(settings, logo);
+  const faceMaterial = new THREE.MeshStandardMaterial({
+    color: settings.cube,
+    roughness: 0.92,
+    metalness: 0,
+  });
+  const markedMaterial = new THREE.MeshStandardMaterial({
+    color: settings.cube,
+    map: brandTexture,
+    roughness: 0.92,
+    metalness: 0,
+  });
+  const cubeMaterials: THREE.Material[] = [
+    markedMaterial,
+    faceMaterial,
+    faceMaterial,
+    faceMaterial,
+    faceMaterial,
+    faceMaterial,
+  ];
+  const cubeGeometry = new THREE.BoxGeometry(settings.cubeSize, settings.cubeSize, settings.cubeSize);
+  const stride = columns + 3;
+  const margin = settings.mode === "roll" ? 2 : 1;
+  for (let row = -margin; row <= rows + margin; row += 1) {
+    for (let col = -1; col <= columns; col += 1) {
+      const index = (row + margin + 1) * stride + col + 2;
+      const staggerX = row % 2 === 0 ? 0 : spacing * 0.5;
+      const x = (col - (columns - 1) / 2) * spacing + staggerX;
+      const z = (row - (rows - 1) / 2) * spacing;
+      const mesh = new THREE.Mesh(cubeGeometry, cubeMaterials);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = true;
+      state.scene.add(mesh);
+      state.cubes.push({ index, row, col, x, z, mesh });
+    }
+  }
+
+  const floorSize = Math.max(3200, state.extent * 7);
+  const groundGeometry = new THREE.PlaneGeometry(floorSize, floorSize);
+  const groundMaterial = new THREE.MeshStandardMaterial({
+    color: settings.background,
+    roughness: 1,
+    metalness: 0,
+  });
+  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.08;
+  ground.receiveShadow = true;
+  state.scene.add(ground);
+
+  // Broad environment light keeps every yellow face alive; the warm key is
+  // responsible for the square, gently feathered shadow seen in the reference.
+  const hemisphereLight = new THREE.HemisphereLight("#fff9df", shade(settings.background, -0.025), 1.9);
+  const ambientLight = new THREE.AmbientLight("#fff5cf", 0.72);
+  const keyLight = new THREE.DirectionalLight("#fff4c2", 1.45);
+  keyLight.position.set(900, 1800, -650);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.set(1024, 1024);
+  keyLight.shadow.bias = -0.00035;
+  keyLight.shadow.normalBias = 0.055;
+  keyLight.shadow.radius = 6;
+  keyLight.shadow.blurSamples = 16;
+  const shadowSpan = Math.max(760, state.extent * 1.3);
+  keyLight.shadow.camera.left = -shadowSpan;
+  keyLight.shadow.camera.right = shadowSpan;
+  keyLight.shadow.camera.top = shadowSpan;
+  keyLight.shadow.camera.bottom = -shadowSpan;
+  keyLight.shadow.camera.near = 10;
+  keyLight.shadow.camera.far = 5000;
+  state.scene.add(hemisphereLight, ambientLight, keyLight, keyLight.target);
+
+  state.cubeGeometry = cubeGeometry;
+  state.cubeMaterials = cubeMaterials;
+  state.brandTexture = brandTexture;
+  state.groundGeometry = groundGeometry;
+  state.groundMaterial = groundMaterial;
+  state.keyLight = keyLight;
+  state.ambientLight = ambientLight;
+  state.hemisphereLight = hemisphereLight;
+}
+
+function drawScene(
+  canvas: HTMLCanvasElement,
+  settings: Settings,
+  time: number,
+  seed: number,
+  logo: HTMLCanvasElement | null,
+) {
+  let state = threeScenes.get(canvas);
+  if (!state) {
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: false,
+      preserveDrawingBuffer: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setPixelRatio(1);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.VSMShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    state = {
+      renderer,
+      scene: new THREE.Scene(),
+      camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 10000),
+      cubes: [],
+      cubeGeometry: null,
+      cubeMaterials: [],
+      brandTexture: null,
+      groundGeometry: null,
+      groundMaterial: null,
+      keyLight: null,
+      ambientLight: null,
+      hemisphereLight: null,
+      structureKey: "",
+      extent: 1,
+    };
+    threeScenes.set(canvas, state);
+  }
+
+  state.renderer.setSize(canvas.width, canvas.height, false);
+  state.renderer.setClearColor(settings.background, 1);
+  state.scene.background = new THREE.Color(settings.background);
+  const structureKey = [
+    canvas.width,
+    canvas.height,
+    settings.density,
+    settings.cubeSize,
+    settings.mode,
+    settings.background,
+    settings.cube,
+    settings.ink,
+    settings.logoText,
+    settings.subline,
+    logoIdentity(logo),
+  ].join("|");
+  if (state.structureKey !== structureKey) {
+    buildThreeScene(state, canvas, settings, logo);
+    state.structureKey = structureKey;
+  }
+
+  const width = canvas.width;
+  const height = canvas.height;
+  const aspect = width / height;
+  const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
+  const scale = Math.min(width, height) / Math.max(420, state.extent * extentFactor) * (settings.cameraZoom / 100);
+  state.camera.left = -width / (2 * scale);
+  state.camera.right = width / (2 * scale);
+  state.camera.top = height / (2 * scale);
+  state.camera.bottom = -height / (2 * scale);
+  state.camera.near = 1;
+  state.camera.far = 10000;
+  const view = cameraVector(settings.cameraYaw, settings.cameraPitch);
+  state.camera.position.set(view.x * 4200, view.y * 4200, view.z * 4200);
+  state.camera.up.set(0, 1, 0);
+  state.camera.lookAt(0, settings.cubeSize * 0.18, 0);
+  state.camera.updateProjectionMatrix();
+
+  const half = settings.cubeSize / 2;
+  const localVertices: Vec3[] = [
+    { x: -half, y: -half, z: -half },
+    { x: half, y: -half, z: -half },
+    { x: half, y: -half, z: half },
+    { x: -half, y: -half, z: half },
+    { x: -half, y: half, z: -half },
+    { x: half, y: half, z: -half },
+    { x: half, y: half, z: half },
+    { x: -half, y: half, z: half },
+  ];
+  for (const cube of state.cubes) {
+    const movement = getMotion(
+      cube.index,
+      cube.row,
+      cube.col,
+      time,
+      seed,
+      settings.mode,
+      settings.motion,
+      settings.gravity,
+      settings.bounce,
+      settings.speed,
+      settings.alignSpeed,
+      settings.sequenceDuration,
+      settings.cubeSize,
+    );
+    const minimumLocalY = Math.min(...localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz).y));
+    const contactHeight = -minimumLocalY + movement.lift * settings.cubeSize;
+    cube.mesh.position.set(cube.x + movement.offsetX, contactHeight, cube.z + movement.offsetZ);
+    cube.mesh.rotation.set(movement.rx, movement.ry, movement.rz, "XYZ");
+  }
+
+  const shadowStrength = clamp(settings.shadow / 100, 0, 1);
+  if (state.keyLight) state.keyLight.intensity = 1.0 + shadowStrength * 0.9;
+  if (state.ambientLight) state.ambientLight.intensity = 0.68 + (1 - shadowStrength) * 0.2;
+  if (state.hemisphereLight) state.hemisphereLight.intensity = 1.9;
+  state.renderer.render(state.scene, state.camera);
 }
 
 function PanelSection({ title, value, defaultOpen = false, children }: { title: string; value?: string; defaultOpen?: boolean; children: React.ReactNode }) {
