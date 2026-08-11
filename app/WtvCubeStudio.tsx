@@ -328,6 +328,25 @@ function clipFace(ctx: CanvasRenderingContext2D, points: Vec2[]) {
   ctx.clip();
 }
 
+// Mark block on the cube face, in face-normalised units.
+const MARK_LEFT = 0.13;
+const MARK_TOP = 0.14;
+const MARK_WIDTH = 0.74;
+const MARK_HEIGHT = 0.55;
+const MARK_BOTTOM = MARK_TOP + MARK_HEIGHT;
+// Subline proportions measured off the MTV Hits lockup, expressed against the
+// mark block: caps are 0.299 of its height, sitting 0.124 below it.
+const SUBLINE_CAP_RATIO = 0.299;
+const SUBLINE_GAP_RATIO = 0.124;
+// Helvetica Bold caps are 0.718em, which turns the cap ratio into a font size.
+const SUBLINE_SIZE = Number(
+  ((SUBLINE_CAP_RATIO * MARK_HEIGHT) / 0.718).toFixed(3),
+);
+const SUBLINE_MAX_WIDTH = MARK_WIDTH;
+// The reference sets its subline tighter than Helvetica's default fit; this
+// closes the ~10% width gap that remains once the cap height matches.
+const SUBLINE_TRACKING = "-0.010px";
+
 function drawMark(
   ctx: CanvasRenderingContext2D,
   corners: Vec2[],
@@ -361,18 +380,39 @@ function drawMark(
     ctx.drawImage(logo, (1 - logoWidth) / 2, 0.08 + (maxLogoHeight - logoHeight) / 2, logoWidth, logoHeight);
   } else {
     ctx.fillStyle = ink;
-    ctx.fillRect(0.13, 0.14, 0.74, 0.55);
+    ctx.fillRect(MARK_LEFT, MARK_TOP, MARK_WIDTH, MARK_HEIGHT);
     ctx.fillStyle = cubeColor;
     ctx.font = "900 0.245px Arial Black, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(logoText.slice(0, 4).toUpperCase(), 0.5, 0.425, 0.66);
   }
+  // Subline proportions are taken from the MTV Hits lockup, measured against
+  // the mark block: cap height 30% of the block, sitting 12% below it, in
+  // Helvetica Bold. Long sublines scale down rather than being squeezed by
+  // fillText's maxWidth, which would condense the letterforms.
+  const sublineText = subline.slice(0, 12);
+  const sublineFont = (size: number) =>
+    `700 ${size}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
   ctx.fillStyle = ink;
-  ctx.font = "800 0.115px Arial, sans-serif";
+  ctx.letterSpacing = SUBLINE_TRACKING;
+  ctx.font = sublineFont(SUBLINE_SIZE);
+  const sublineWidth = ctx.measureText(sublineText).width;
+  if (sublineWidth > SUBLINE_MAX_WIDTH) {
+    ctx.font = sublineFont(SUBLINE_SIZE * (SUBLINE_MAX_WIDTH / sublineWidth));
+  }
   ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(subline.slice(0, 12), 0.5, 0.82, 0.82);
+  // Must precede measureText: actualBoundingBoxAscent is reported relative to
+  // whichever baseline is currently set.
+  ctx.textBaseline = "alphabetic";
+  // Anchor off the rendered cap height rather than the nominal one, so the gap
+  // below the mark holds even when the size is reduced to fit a long subline.
+  const capHeight = ctx.measureText("H").actualBoundingBoxAscent;
+  ctx.fillText(
+    sublineText,
+    0.5,
+    MARK_BOTTOM + SUBLINE_GAP_RATIO * MARK_HEIGHT + capHeight,
+  );
   ctx.restore();
 }
 
