@@ -87,7 +87,9 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /onPointerMove=\{moveCamera\}/, "dragging the preview should orbit the camera");
   assert.doesNotMatch(component, /time \* settings\.speed/, "speed should shape gravity without preventing the fixed ten-second convergence");
   assert.match(component, /minimumLocalY/, "rotating cubes should maintain physical ground contact");
-  assert.match(component, /drawShadowLayer/, "rendering should include layered soft shadows");
+  assert.match(component, /drawProjectedShadow/, "rendering should include directional projected shadows");
+  assert.doesNotMatch(component, /ctx\.ellipse\(/, "cast shadows should retain the cube footprint instead of becoming ellipses");
+  assert.doesNotMatch(component, /grainIndex|const vignette/, "the matte reference floor should not contain artificial grain or a vignette");
   assert.match(component, /visibleFaces/, "tumbling cubes should use camera-aware face rendering");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));

@@ -635,23 +635,10 @@ function drawScene(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
 
-  const background = ctx.createRadialGradient(width * 0.43, height * 0.3, 0, width * 0.52, height * 0.54, Math.max(width, height) * 0.88);
-  background.addColorStop(0, shade(settings.background, 0.085));
-  background.addColorStop(0.54, shade(settings.background, 0.018));
-  background.addColorStop(1, shade(settings.background, -0.03));
-  ctx.fillStyle = background;
+  // The reference floor is a continuous matte sweep. A radial hotspot, grain,
+  // or vignette makes it read like a textured card instead of a studio floor.
+  ctx.fillStyle = shade(settings.background, 0.012);
   ctx.fillRect(0, 0, width, height);
-
-  ctx.save();
-  ctx.globalAlpha = 0.022;
-  ctx.fillStyle = "#3d3510";
-  for (let grainIndex = 0; grainIndex < 180; grainIndex += 1) {
-    const grainX = hash(grainIndex + 401, seed) * width;
-    const grainY = hash(grainIndex + 809, seed) * height;
-    const grainSize = 0.45 + hash(grainIndex + 1201, seed) * 0.8;
-    ctx.fillRect(grainX, grainY, grainSize, grainSize);
-  }
-  ctx.restore();
 
   const aspect = width / height;
   const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
@@ -697,51 +684,86 @@ function drawScene(
   cubes.sort((a, b) => a.depth - b.depth);
 
   const shadowStrength = clamp(settings.shadow / 100, 0, 1);
-  const drawShadowLayer = (blur: number, alpha: number, radiusX: number, radiusY: number, offsetX: number, offsetY: number) => {
+  const appendShadowPolygon = (points: Vec2[]) => {
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let pointIndex = 1; pointIndex < points.length; pointIndex += 1) {
+      ctx.lineTo(points[pointIndex].x, points[pointIndex].y);
+    }
+    ctx.closePath();
+  };
+  const drawProjectedShadow = (
+    footprint: Vec2[],
+    offset: Vec2,
+    blur: number,
+    alpha: number,
+  ) => {
     ctx.save();
     ctx.globalCompositeOperation = "multiply";
-    ctx.globalAlpha = shadowStrength * alpha;
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = shade(settings.background, -0.68);
     ctx.filter = `blur(${blur}px)`;
-    for (const cube of cubes) {
-      const movement = getMotion(
-        cube.index,
-        cube.row,
-        cube.col,
-        time,
-        seed,
-        settings.mode,
-        settings.motion,
-        settings.gravity,
-        settings.bounce,
-        settings.speed,
-        settings.alignSpeed,
-        settings.sequenceDuration,
-        settings.cubeSize,
-      );
-      const ground = projectPoint({ x: cube.x + movement.offsetX, y: 0, z: cube.z + movement.offsetZ });
-      const liftFade = clamp(1 / (1 + movement.lift * 0.82), 0.08, 1);
-      ctx.globalAlpha = shadowStrength * alpha * liftFade;
-      ctx.beginPath();
-      ctx.ellipse(
-        ground.x + half * scale * offsetX,
-        ground.y + half * scale * offsetY,
-        half * scale * radiusX,
-        half * scale * radiusY,
-        -0.24,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
+    const shifted = footprint.map((point) => ({ x: point.x + offset.x, y: point.y + offset.y }));
+    ctx.beginPath();
+    appendShadowPolygon(footprint);
+    appendShadowPolygon(shifted);
+    for (let pointIndex = 0; pointIndex < footprint.length; pointIndex += 1) {
+      const nextIndex = (pointIndex + 1) % footprint.length;
+      appendShadowPolygon([
+        footprint[pointIndex],
+        footprint[nextIndex],
+        shifted[nextIndex],
+        shifted[pointIndex],
+      ]);
     }
+    ctx.fill();
     ctx.restore();
   };
-  // Three low-opacity layers reproduce the long, feathered penumbra in the
-  // bumper without a single visible ellipse edge. All fall down-left, away
-  // from the upper-right key.
-  drawShadowLayer(Math.max(11, half * scale * 0.38), 0.2, 1.32, 0.56, -0.5, 0.55);
-  drawShadowLayer(Math.max(6, half * scale * 0.2), 0.24, 1.02, 0.38, -0.3, 0.36);
-  drawShadowLayer(Math.max(2.8, half * scale * 0.09), 0.18, 0.64, 0.21, -0.08, 0.14);
+
+  for (const cube of cubes) {
+    const movement = getMotion(
+      cube.index,
+      cube.row,
+      cube.col,
+      time,
+      seed,
+      settings.mode,
+      settings.motion,
+      settings.gravity,
+      settings.bounce,
+      settings.speed,
+      settings.alignSpeed,
+      settings.sequenceDuration,
+      settings.cubeSize,
+    );
+    const centerX = cube.x + movement.offsetX;
+    const centerZ = cube.z + movement.offsetZ;
+    const footprint = [
+      projectPoint({ x: centerX - half, y: 0, z: centerZ - half }),
+      projectPoint({ x: centerX + half, y: 0, z: centerZ - half }),
+      projectPoint({ x: centerX + half, y: 0, z: centerZ + half }),
+      projectPoint({ x: centerX - half, y: 0, z: centerZ + half }),
+    ];
+    const lift = clamp(movement.lift, 0, 2.5);
+    const liftFade = clamp(1 / (1 + lift * 0.55), 0.18, 1);
+    const castOffset = {
+      x: -half * scale * (0.52 + lift * 0.14),
+      y: half * scale * (0.36 + lift * 0.1),
+    };
+    // Keep the square footprint visible in the cast shadow. The original has
+    // only a small penumbra; the darker contact layer anchors each cube.
+    drawProjectedShadow(
+      footprint,
+      castOffset,
+      Math.max(2.2, half * scale * (0.055 + lift * 0.012)),
+      shadowStrength * 0.23 * liftFade,
+    );
+    drawProjectedShadow(
+      footprint,
+      { x: -half * scale * 0.035, y: half * scale * 0.025 },
+      Math.max(0.8, half * scale * 0.018),
+      shadowStrength * 0.13 * liftFade,
+    );
+  }
 
   for (const cube of cubes) {
     const movement = getMotion(
@@ -833,11 +855,6 @@ function drawScene(
     }
   }
 
-  const vignette = ctx.createRadialGradient(width * 0.5, height * 0.47, Math.min(width, height) * 0.22, width * 0.5, height * 0.5, Math.max(width, height) * 0.72);
-  vignette.addColorStop(0, "rgba(0,0,0,0)");
-  vignette.addColorStop(1, "rgba(0,0,0,0.04)");
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, width, height);
 }
 
 function PanelSection({ title, value, defaultOpen = false, children }: { title: string; value?: string; defaultOpen?: boolean; children: React.ReactNode }) {
