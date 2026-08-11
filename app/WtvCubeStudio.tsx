@@ -825,6 +825,21 @@ function drawScene(
   ctx.fillRect(0, 0, width, height);
 }
 
+function PanelSection({ title, value, defaultOpen = false, children }: { title: string; value?: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  return (
+    <details className="panel-section" open={defaultOpen}>
+      <summary>
+        <h2>{title}</h2>
+        {value ? <span className="section-value">{value}</span> : null}
+        <svg className="chevron" viewBox="0 0 10 16" aria-hidden="true" focusable="false">
+          <path d="M2 1.5 8.5 8 2 14.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </summary>
+      <div className="section-body">{children}</div>
+    </details>
+  );
+}
+
 function RangeControl({ label, value, min, max, step = 1, suffix = "", onChange }: { label: string; value: number; min: number; max: number; step?: number; suffix?: string; onChange: (value: number) => void }) {
   const percentage = ((value - min) / (max - min)) * 100;
   return (
@@ -868,7 +883,7 @@ export default function WtvCubeStudio() {
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [seed, setSeed] = useState(24);
   const [preset, setPreset] = useState("Reference");
-  const [notice, setNotice] = useState("LIVE PREVIEW");
+  const [notice, setNotice] = useState("Live preview");
   const [settings, setSettings] = useState<Settings>({
     density: 7,
     cubeSize: 76,
@@ -903,7 +918,7 @@ export default function WtvCubeStudio() {
     image.onload = () => {
       logoRef.current = prepareLogoSource(image);
       setNotice("WTV LOGO ACTIVE");
-      window.setTimeout(() => setNotice("LIVE PREVIEW"), 1000);
+      window.setTimeout(() => setNotice("Live preview"), 1000);
     };
     image.src = new URL("wtv-logo.png", document.baseURI).href;
   }, []);
@@ -956,14 +971,14 @@ export default function WtvCubeStudio() {
     setTimeline(0);
     setPlaying(true);
     setNotice("RESTARTED");
-    window.setTimeout(() => setNotice("LIVE PREVIEW"), 1000);
+    window.setTimeout(() => setNotice("Live preview"), 1000);
   };
 
   const randomize = () => {
     setSeed((current) => (current * 9301 + 49297) % 9999);
     setTimeline(0);
     setNotice("NEW SEED");
-    window.setTimeout(() => setNotice("LIVE PREVIEW"), 1000);
+    window.setTimeout(() => setNotice("Live preview"), 1000);
   };
 
   const applyPreset = (name: string) => {
@@ -1093,7 +1108,7 @@ export default function WtvCubeStudio() {
       setNotice("MP4 EXPORT UNSUPPORTED");
     } finally {
       setRecording(false);
-      window.setTimeout(() => setNotice("LIVE PREVIEW"), 2400);
+      window.setTimeout(() => setNotice("Live preview"), 2400);
     }
   };
 
@@ -1185,7 +1200,7 @@ export default function WtvCubeStudio() {
           <span className="brand-title">CUBE STUDIO</span>
           <span className="version">v1.0</span>
         </div>
-        <div className="top-meta"><span className="live-dot" /> RESPONSIVE BUMPER GENERATOR <span>{sequenceLabel} SEC SEQUENCE</span></div>
+        <div className="top-meta"><span className="live-dot" /> Responsive bumper generator <span>{sequenceLabel} sec sequence</span></div>
       </header>
 
       <section className="workspace">
@@ -1204,8 +1219,8 @@ export default function WtvCubeStudio() {
               onKeyDown={controlCameraWithKeyboard}
             />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
-            <div className="camera-hint">DRAG TO ORBIT · SCROLL TO ZOOM</div>
-            <div className="stage-overlay stage-overlay-bottom"><span>SEED {seed.toString().padStart(4, "0")}</span><span>CAM {settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{settings.mode.toUpperCase()} / {settings.speed.toFixed(2)}X</span></div>
+            <div className="camera-hint">Drag to orbit · scroll to zoom</div>
+            <div className="stage-overlay stage-overlay-bottom"><span>Seed {seed.toString().padStart(4, "0")}</span><span>{settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{settings.mode === "settle" ? "Drop" : "Roll"} · {settings.speed.toFixed(2)}×</span></div>
           </div>
 
           <div className="transport">
@@ -1223,21 +1238,24 @@ export default function WtvCubeStudio() {
         </div>
 
         <aside className="control-panel">
-          <section className="panel-section preset-section">
-            <div className="section-heading"><span>01</span><h2>LOOK</h2><small>{preset}</small></div>
+          <PanelSection title="Look" value={preset} defaultOpen>
             <div className="preset-grid">
               {Object.keys(PRESETS).map((name) => <button key={name} type="button" className={preset === name ? "active" : ""} onClick={() => applyPreset(name)}>{name}</button>)}
             </div>
             <ColorControl label="Background" value={settings.background} onChange={(value) => updateSetting("background", value)} />
             <ColorControl label="Cube faces" value={settings.cube} onChange={(value) => updateSetting("cube", value)} />
             <ColorControl label="Logo / ink" value={settings.ink} onChange={(value) => updateSetting("ink", value)} />
-          </section>
+          </PanelSection>
 
-          <section className="panel-section">
-            <div className="section-heading"><span>02</span><h2>GRID + MOTION</h2></div>
+          <PanelSection title="Grid" value={`${settings.density} \u00d7 ${settings.cubeSize}px`}>
             <RangeControl label="Density" value={settings.density} min={4} max={10} onChange={(value) => updateSetting("density", value)} />
             <RangeControl label="Cube size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
-            <div className="control-divider"><span>PHYSICS</span></div>
+          </PanelSection>
+
+          <PanelSection title="Motion" value={settings.mode === "settle" ? "Drop" : "Roll"}>
+            <div className="segmented two">
+              {(["settle", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "Drop" : "Roll"}</button>)}
+            </div>
             <RangeControl label="Sequence time" value={settings.sequenceDuration} min={3} max={10} step={0.5} suffix=" s" onChange={(value) => updateSetting("sequenceDuration", value)} />
             <RangeControl label="Gravity" value={settings.gravity} min={45} max={170} suffix="%" onChange={(value) => updateSetting("gravity", value)} />
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
@@ -1245,40 +1263,37 @@ export default function WtvCubeStudio() {
             <RangeControl label="Fall speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
             <RangeControl label="Face align" value={settings.alignSpeed} min={0.75} max={4} step={0.05} suffix="x" onChange={(value) => updateSetting("alignSpeed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
-            <div className="control-divider"><span>CAMERA</span></div>
-            <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="°" onChange={(value) => updateSetting("cameraYaw", value)} />
-            <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="°" onChange={(value) => updateSetting("cameraPitch", value)} />
-            <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
-            <p className="camera-help">Drag directly on the preview to orbit. Scroll to zoom.</p>
-            <div className="segmented two">
-              {(["settle", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "drop" : mode}</button>)}
-            </div>
-          </section>
+          </PanelSection>
 
-          <section className="panel-section">
-            <div className="section-heading"><span>03</span><h2>BRAND</h2></div>
+          <PanelSection title="Camera" value={`${settings.cameraYaw}\u00b0 / ${settings.cameraPitch}\u00b0`}>
+            <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="\u00b0" onChange={(value) => updateSetting("cameraYaw", value)} />
+            <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="\u00b0" onChange={(value) => updateSetting("cameraPitch", value)} />
+            <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
+            <p className="camera-help">Drag on the preview to orbit. Scroll to zoom.</p>
+          </PanelSection>
+
+          <PanelSection title="Brand" value={settings.logoText}>
             <div className="text-grid">
               <label><span>Mark</span><input className="caps" value={settings.logoText} maxLength={4} onChange={(event) => updateSetting("logoText", event.target.value)} /></label>
               <label><span>Type / subline</span><input value={settings.subline} maxLength={12} onChange={(event) => updateSetting("subline", event.target.value)} /></label>
             </div>
             <div className="upload-row three">
-              <button type="button" onClick={activateDefaultLogo}>WTV LOGO</button>
-              <label className="upload-button">UPLOAD LOGO<input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} /></label>
-              <button type="button" onClick={clearLogo}>USE TEXT MARK</button>
+              <button type="button" onClick={activateDefaultLogo}>WTV logo</button>
+              <label className="upload-button">Upload<input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} /></label>
+              <button type="button" onClick={clearLogo}>Text mark</button>
             </div>
-          </section>
+          </PanelSection>
 
-          <section className="panel-section export-section">
-            <div className="section-heading"><span>04</span><h2>FORMAT + EXPORT</h2></div>
+          <PanelSection title="Export" value={aspect}>
             <div className="segmented">
               {(["16:9", "9:16", "1:1"] as Aspect[]).map((item) => <button key={item} type="button" className={aspect === item ? "active" : ""} onClick={() => setAspect(item)}>{item}</button>)}
             </div>
             <div className="export-grid">
-              <button className="primary-action" type="button" onClick={exportMp4} disabled={recording} aria-describedby="export-description">{recording ? `ENCODING MP4 ${exportProgress}%` : "↓ EXPORT MP4"}</button>
-              <button type="button" onClick={downloadPng}>DOWNLOAD PNG</button>
+              <button className="primary-action" type="button" onClick={exportMp4} disabled={recording} aria-describedby="export-description">{recording ? `Encoding ${exportProgress}%` : "Export MP4"}</button>
+              <button type="button" onClick={downloadPng}>Download PNG</button>
             </div>
-            <p id="export-description" aria-live="polite">MP4 exports the full {sequenceLabel}-second fall-and-align sequence at 30 fps. Use the same seed across aspect ratios for a matched rollout system.</p>
-          </section>
+            <p id="export-description" aria-live="polite">MP4 exports the full {sequenceLabel}-second sequence at 30 fps. Use the same seed across aspect ratios for a matched rollout.</p>
+          </PanelSection>
         </aside>
       </section>
     </main>
