@@ -64,8 +64,9 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /prepareLogoSource/);
   assert.equal(component.match(/drawMark\(/g)?.length, 2, "drawMark should have one definition and one single-face call");
   assert.doesNotMatch(component, /const spacing = settings\.cubeSize/, "grid spacing must not cancel the cube-size control");
-  assert.match(component, /const spacing = 76 \* 1\.72/);
-  assert.match(component, /ctx\.fillText\(subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
+  assert.match(component, /const BASE_SPACING = 76 \* 1\.72/);
+  assert.match(component, /const sublineText = subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
+  assert.match(component, /subline: "MUSIC",\s+mode: "roll",/, "roll should be the default motion mode");
   assert.match(component, /hasTransparentBackground/, "transparent source artwork should preserve internal white details");
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
   assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
@@ -77,7 +78,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /label="Face align" value=\{settings\.alignSpeed\}/, "the face alignment speed controller should be visible");
   assert.match(component, /const alignDuration = Math\.max\(0\.22, \(settleEnd - impactTime\) \/ alignSpeedScale\)/, "alignment speed should shorten only the post-impact convergence");
   assert.match(component, /const rebound = Math\.abs\(collisionWave\)/, "ground impacts should create damped rebounds");
-  assert.match(component, /const settleEnd = 8\.6/, "the reference simulation should converge before the selected end frame");
+  assert.match(component, /const SEQUENCE_END = 8\.6/, "the reference simulation should converge before the selected end frame");
   assert.match(component, /cameraZoom: clamp\(current\.cameraZoom/, "scrolling the preview should control camera zoom");
   assert.match(component, /onPointerMove=\{moveCamera\}/, "dragging the preview should orbit the camera");
   assert.doesNotMatch(component, /time \* settings\.speed/, "speed should shape gravity without preventing the fixed ten-second convergence");

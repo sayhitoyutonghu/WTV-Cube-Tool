@@ -64,12 +64,14 @@ const ROLL_SPACING = 2.4;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
 const BASE_SPACING = 76 * 1.72;
-// The reference frames its rolling section far tighter than drop mode does:
-// about five cubes across the frame rather than eight. Calibrate on cube size,
-// not on mark size — the reference's mark covers roughly 45% of a cube face
-// where this one covers 74%, so matching the marks leaves the cubes about a
-// third too small. Density and Zoom still override this.
-const ROLL_FRAMING = 0.4;
+// How tightly the grid is framed, shared by every mode so drop and roll look
+// through the same camera. Calibrated on cube size against the reference
+// footage rather than on mark size: its mark covers about 45% of a cube face
+// where this one covers 74%, so matching the marks would leave the cubes a
+// third too small. Keep it above 0.443 — below that the Math.max floor on the
+// divisor swallows the value and the constant stops doing anything at all.
+// Density and Zoom still override it.
+const FRAMING = 0.5;
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "16:9": [1280, 720],
   "9:16": [720, 1280],
@@ -93,7 +95,6 @@ const PRESETS: Record<string, Partial<Settings>> = {
     background: "#f5df18",
     cube: "#f1da1d",
     ink: "#111111",
-    mode: "settle",
   },
   Broadcast: {
     density: 6,
@@ -111,7 +112,6 @@ const PRESETS: Record<string, Partial<Settings>> = {
     background: "#08a8df",
     cube: "#fff348",
     ink: "#111111",
-    mode: "settle",
   },
   Minimal: {
     density: 5,
@@ -129,7 +129,6 @@ const PRESETS: Record<string, Partial<Settings>> = {
     background: "#f0eee6",
     cube: "#ff493d",
     ink: "#111111",
-    mode: "settle",
   },
 };
 
@@ -658,8 +657,7 @@ function drawScene(
   // the widened lattice pulls it back and halves the cubes on screen; measured
   // against the reference footage they should stay the size the other modes
   // render them, with the wider pitch simply showing fewer of them.
-  const extent = Math.max(columns, rows) * BASE_SPACING
-    * (settings.mode === "roll" ? ROLL_FRAMING : 1);
+  const extent = Math.max(columns, rows) * BASE_SPACING * FRAMING;
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
   const scale = Math.min(width, height) / Math.max(420, extent * extentFactor) * (settings.cameraZoom / 100);
   const half = settings.cubeSize / 2;
@@ -902,7 +900,7 @@ export default function WtvCubeStudio() {
     ink: "#111111",
     logoText: "WTV",
     subline: "MUSIC",
-    mode: "settle",
+    mode: "roll",
   });
 
   const [canvasWidth, canvasHeight] = RESOLUTIONS[aspect];
