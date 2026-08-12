@@ -75,8 +75,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
   assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
   assert.match(component, /const MAX_DURATION = 10/, "the motion model should retain a ten-second reference simulation");
-  assert.match(component, /sequenceDuration: 12/, "the slower reference default should expose its complete twelve-second sequence");
-  assert.match(component, /speed: 0\.5/, "the reference motion should default to the calmer half-speed shown in the control reference");
+  assert.match(component, /sequenceDuration: 8/, "the three-quarter-speed reference default should expose its complete eight-second sequence");
+  assert.match(component, /speed: 0\.75/, "the reference motion should default to three-quarter speed");
   assert.match(component, /baseSequenceDurationRef/, "speed changes should retime the complete sequence instead of cutting it off");
   assert.match(component, /baseSequenceDurationRef\.current \/ nextSpeed/, "lower speed should proportionally increase the playback and export duration");
   assert.match(component, /const simulationTime = time \* \(MAX_DURATION \/ clamp\(sequenceDuration, MIN_SEQUENCE_DURATION, MAX_SEQUENCE_DURATION\)\)/, "the displayed duration should time-stretch the complete physics sequence");
