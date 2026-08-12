@@ -97,7 +97,10 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const markedMaterial[\s\S]*?color: "#ffffff"/, "the logo texture should not multiply the selected cube colour twice");
   assert.match(component, /mesh\.castShadow = true/, "every cube should cast a physical shadow");
   assert.match(component, /ground\.receiveShadow = true/, "the modeled ground plane should receive cube shadows");
-  assert.match(component, /offsetZ: \(advance - ROLL_TURNS\) \* cubeSize/, "rolling cubes should translate one width per quarter turn");
+  assert.match(component, /offsetZ: \(advance - turnCount\) \* cubeSize/, "rolling cubes should translate one width per selected quarter turn");
+  assert.match(component, /const DEFAULT_ROLL_TURNS = 1/, "the reference default should make one decisive quarter-turn");
+  assert.match(component, /rx: \(turns - turnCount\) \* \(Math\.PI \/ 2\)/, "the cube should start on its selected previous face and land upright");
+  assert.match(component, /label="Roll turns" value=\{settings\.rollTurns\}/, "roll turns should be user-adjustable from one to four quarter-turns");
   assert.match(component, /function stickyRollEase/, "rolling cubes should use the reference-style viscous release and landing curve");
   assert.match(component, /const ROLL_TIP_FRACTION = 0\.55/, "the sticky quarter-turn should spend longer in contact transition");
   assert.match(component, /const ROLL_FINAL_HOLD = 1\.5/, "roll mode should reserve only a one-and-a-half-second final hold");

@@ -21,6 +21,7 @@ type Settings = {
   density: number;
   cubeSize: number;
   sequenceDuration: number;
+  rollTurns: number;
   motion: number;
   gravity: number;
   bounce: number;
@@ -45,9 +46,9 @@ const EXPORT_FPS = 30;
 // Simulation time by which every mode has come to rest, leaving a beat of held
 // frames before the loop point.
 const SEQUENCE_END = 8.6;
-// Roll mode. Every cube tips this many quarter turns, all in one direction.
-// A multiple of four, so the mark finishes upright again.
-const ROLL_TURNS = 4;
+// The source gives each cube one decisive 90° tip. It starts on the previous
+// face and lands with the marked face upright instead of repeatedly tumbling.
+const DEFAULT_ROLL_TURNS = 1;
 const ROLL_CYCLE = 1.35;
 const ROLL_FINAL_HOLD = 1.5;
 // Measured from the reference's opening and settled frames: the cube faces
@@ -97,6 +98,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 7,
     cubeSize: 76,
     sequenceDuration: 12,
+    rollTurns: DEFAULT_ROLL_TURNS,
     motion: 64,
     gravity: 100,
     bounce: 52,
@@ -114,6 +116,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 6,
     cubeSize: 84,
     sequenceDuration: 5,
+    rollTurns: 2,
     motion: 78,
     gravity: 118,
     bounce: 66,
@@ -131,6 +134,7 @@ const PRESETS: Record<string, Partial<Settings>> = {
     density: 5,
     cubeSize: 94,
     sequenceDuration: 7,
+    rollTurns: DEFAULT_ROLL_TURNS,
     motion: 34,
     gravity: 82,
     bounce: 30,
@@ -508,6 +512,7 @@ function getMotion(
   alignSpeed: number,
   sequenceDuration: number,
   cubeSize: number,
+  rollTurns: number,
 ) {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
@@ -520,6 +525,7 @@ function getMotion(
   const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, MIN_SEQUENCE_DURATION, MAX_SEQUENCE_DURATION));
 
   if (mode === "roll") {
+    const turnCount = clamp(Math.round(rollTurns), 1, 4);
     // The reference tips its cubes about a bottom edge rather than dropping
     // them: the marked face keeps pointing at the camera and the mark turns 90°
     // per tip, which is what rotating about that face's own normal does. Most
@@ -538,18 +544,18 @@ function getMotion(
     // changing Fall speed still changes the full duration without stretching
     // the end hold back out again.
     const activeDuration = Math.max(0.5, sequenceDuration - ROLL_FINAL_HOLD);
-    const rollSimulationEnd = ROLL_STAGGER / alignSpeedScale + ROLL_TURNS * cycle;
+    const rollSimulationEnd = ROLL_STAGGER / alignSpeedScale + turnCount * cycle;
     const rollSimulationTime = clamp(time / activeDuration, 0, 1) * rollSimulationEnd;
-    // Every cube rolls one way and keeps going, as the footage does. Rolling out
-    // and back reads as cubes tipping in both directions, which is wrong.
-    const local = clamp(rollSimulationTime - start, 0, ROLL_TURNS * cycle);
+    // Each cube makes one decisive tip in the same direction. Repeating this
+    // four times made the field feel busy and less graphic than the source.
+    const local = clamp(rollSimulationTime - start, 0, turnCount * cycle);
     const progress = local / cycle;
     const done = Math.floor(progress);
     const tip = clamp((progress - done) / ROLL_TIP_FRACTION, 0, 1);
     // Hold onto the planted face before releasing, then absorb the landing
     // into the next face. The longer active window and sticky easing give the
     // roll weight without deforming the modeled cube.
-    const turns = Math.min(ROLL_TURNS, done + stickyRollEase(tip));
+    const turns = Math.min(turnCount, done + stickyRollEase(tip));
     const settled = Math.floor(turns);
     const partial = (turns - settled) * (Math.PI / 2);
     // Pivoting about the leading bottom edge advances the centre by exactly one
@@ -561,14 +567,15 @@ function getMotion(
     // away from the camera instead of rotating on the spot. The mark sits on
     // x-plus, so that axis is x and the cube travels along z.
     return {
-      rx: turns * (Math.PI / 2),
+      // Begin on the previous face and finish upright after one quarter-turn.
+      rx: (turns - turnCount) * (Math.PI / 2),
       ry: 0,
       rz: 0,
       lift: 0,
       offsetX: 0,
-      // Measure back from the finished grid, so four physical quarter-turns
-      // carry the cube into its final lattice position with the mark upright.
-      offsetZ: (advance - ROLL_TURNS) * cubeSize,
+      // Measure back from the finished grid, so the single physical tip carries
+      // the cube into its final lattice position with the mark upright.
+      offsetZ: (advance - turnCount) * cubeSize,
     };
   }
 
@@ -697,10 +704,10 @@ function drawScene2dLegacy(
   const projectPoint = (point: Vec3) => project(point, width, height, scale, settings.cameraYaw, settings.cameraPitch);
   const cubes: Array<{ index: number; row: number; col: number; x: number; z: number; depth: number }> = [];
 
-  // Mid-roll a cube sits up to ROLL_TURNS cubes along z from its cell, baring
-  // the edge it rolled off. Extra rows on both sides cover that.
+  // A cube sits up to the selected number of turns along z from its cell,
+  // baring the edge it rolled off. Extra rows on both sides cover that.
   const runUp = settings.mode === "roll"
-    ? Math.ceil((ROLL_TURNS * settings.cubeSize) / spacing) + 1
+    ? Math.ceil((settings.rollTurns * settings.cubeSize) / spacing) + 1
     : 0;
   const stride = columns + 3;
 
@@ -766,6 +773,7 @@ function drawScene2dLegacy(
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
+      settings.rollTurns,
     );
     const centerX = cube.x + movement.offsetX;
     const centerZ = cube.z + movement.offsetZ;
@@ -811,6 +819,7 @@ function drawScene2dLegacy(
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
+      settings.rollTurns,
     );
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
@@ -1019,7 +1028,7 @@ function buildThreeScene(
   const cubeGeometry = new THREE.BoxGeometry(settings.cubeSize, settings.cubeSize, settings.cubeSize);
   const stride = columns + 3;
   const margin = settings.mode === "roll"
-    ? Math.ceil((ROLL_TURNS * settings.cubeSize) / spacing) + 1
+    ? Math.ceil((settings.rollTurns * settings.cubeSize) / spacing) + 1
     : 1;
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
@@ -1129,6 +1138,7 @@ function drawScene(
     settings.density,
     settings.cubeSize,
     settings.mode,
+    settings.rollTurns,
     settings.background,
     settings.cube,
     settings.ink,
@@ -1190,6 +1200,7 @@ function drawScene(
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
+      settings.rollTurns,
     );
     const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
     const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
@@ -1302,6 +1313,7 @@ export default function WtvCubeStudio() {
     density: 7,
     cubeSize: 76,
     sequenceDuration: 12,
+    rollTurns: DEFAULT_ROLL_TURNS,
     motion: 64,
     gravity: 100,
     bounce: 52,
@@ -1693,6 +1705,7 @@ export default function WtvCubeStudio() {
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
             <RangeControl label="Fall speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
+            {settings.mode === "roll" && <RangeControl label="Roll turns" value={settings.rollTurns} min={1} max={4} step={1} suffix=" × 90°" onChange={(value) => updateSetting("rollTurns", value)} />}
             <RangeControl label="Face align" value={settings.alignSpeed} min={0.75} max={4} step={0.05} suffix="x" onChange={(value) => updateSetting("alignSpeed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
           </PanelSection>
