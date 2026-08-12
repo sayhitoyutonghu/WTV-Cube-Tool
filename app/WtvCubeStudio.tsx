@@ -49,9 +49,14 @@ const SEQUENCE_END = 8.6;
 // A multiple of four, so the mark finishes upright again.
 const ROLL_TURNS = 4;
 const ROLL_CYCLE = 1.35;
+const ROLL_FINAL_HOLD = 1.5;
+// Measured from the reference's opening and settled frames: the cube faces
+// grow by roughly seven percent while the orbit stays locked. Keep the move
+// subtle and finish it with the rolling wave, before the final hold.
+const ROLL_ZOOM_IN = 1.07;
 // Fraction of a cycle spent tipping; the rest is the cube sitting still. Keep
 // it low — in the reference only a handful of cubes are moving at any instant.
-const ROLL_TIP_FRACTION = 0.35;
+const ROLL_TIP_FRACTION = 0.55;
 // Spread of release times across the grid. Wider means fewer cubes tipping at
 // once, which is what makes the motion read as a wave crossing a settled field.
 const ROLL_STAGGER = 7;
@@ -154,6 +159,23 @@ function formatTimecode(value: number) {
 function hash(value: number, seed: number) {
   const n = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
   return n - Math.floor(n);
+}
+
+// The bumper's roll does not leave and meet the floor at an even rate. It
+// clings briefly at the start, gathers speed after the balance point, then
+// eases firmly into the next face. This asymmetric S-curve keeps the cube
+// rigid while giving each quarter-turn the reference's viscous weight.
+function stickyRollEase(value: number) {
+  const heldUntil = 0.18;
+  const landingAt = 0.72;
+  if (value <= heldUntil) return 0;
+  if (value < landingAt) {
+    const t = (value - heldUntil) / (landingAt - heldUntil);
+    const release = t * t * (3 - 2 * t);
+    return release * 0.92;
+  }
+  const settle = (value - landingAt) / (1 - landingAt);
+  return 0.92 + 0.08 * settle * settle * (3 - 2 * settle);
 }
 
 function hexToRgb(hex: string) {
@@ -511,15 +533,23 @@ function getMotion(
     // rolling cube is always already square to the grid.
     const start = (stagger * ROLL_STAGGER) / alignSpeedScale;
     const cycle = ROLL_CYCLE;
+    // Reserve exactly the final 1.5 seconds for the completed tableau. The
+    // whole staggered wave is fitted into the remaining delivery time, so
+    // changing Fall speed still changes the full duration without stretching
+    // the end hold back out again.
+    const activeDuration = Math.max(0.5, sequenceDuration - ROLL_FINAL_HOLD);
+    const rollSimulationEnd = ROLL_STAGGER / alignSpeedScale + ROLL_TURNS * cycle;
+    const rollSimulationTime = clamp(time / activeDuration, 0, 1) * rollSimulationEnd;
     // Every cube rolls one way and keeps going, as the footage does. Rolling out
     // and back reads as cubes tipping in both directions, which is wrong.
-    const local = clamp(simulationTime - start, 0, ROLL_TURNS * cycle);
+    const local = clamp(rollSimulationTime - start, 0, ROLL_TURNS * cycle);
     const progress = local / cycle;
     const done = Math.floor(progress);
     const tip = clamp((progress - done) / ROLL_TIP_FRACTION, 0, 1);
-    // A tipping cube passes its balance point and falls onto the next face, so
-    // it accelerates through the turn rather than drifting into it.
-    const turns = Math.min(ROLL_TURNS, done + tip * tip * (3 - 2 * tip));
+    // Hold onto the planted face before releasing, then absorb the landing
+    // into the next face. The longer active window and sticky easing give the
+    // roll weight without deforming the modeled cube.
+    const turns = Math.min(ROLL_TURNS, done + stickyRollEase(tip));
     const settled = Math.floor(turns);
     const partial = (turns - settled) * (Math.PI / 2);
     // Pivoting about the leading bottom edge advances the centre by exactly one
@@ -641,8 +671,11 @@ function drawScene2dLegacy(
   ctx.fillRect(0, 0, width, height);
 
   const aspect = width / height;
-  const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
-  const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
+  // In the 16:9 reference, a settled frame shows about five complete rows and
+  // eight complete columns, plus clipped edge cubes. This surface generates a
+  // little beyond that crop so the zoom never reveals an empty border.
+  const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.18 : aspect < 0.8 ? 0.68 : 1)));
+  const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.72 : aspect < 0.8 ? 1.45 : 1)));
   // Keep the grid footprint stable so cube size remains an independent visual
   // control in every aspect ratio instead of cancelling out through auto-fit.
   // A quarter turn carries a cube a full cube width, so a rolled cube lands on
@@ -1112,7 +1145,14 @@ function drawScene(
   const height = canvas.height;
   const aspect = width / height;
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
-  const scale = Math.min(width, height) / Math.max(420, state.extent * extentFactor) * (settings.cameraZoom / 100);
+  const rollActiveDuration = Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD);
+  const rollZoomProgress = settings.mode === "roll"
+    ? clamp(time / rollActiveDuration, 0, 1)
+    : 0;
+  // Smoothly push in during the roll and hold the final framing. Orthographic
+  // projection makes this a true scale move with no unwanted perspective shift.
+  const rollZoom = 1 + (ROLL_ZOOM_IN - 1) * (rollZoomProgress * rollZoomProgress * (3 - 2 * rollZoomProgress));
+  const scale = Math.min(width, height) / Math.max(420, state.extent * extentFactor) * (settings.cameraZoom / 100) * rollZoom;
   state.camera.left = -width / (2 * scale);
   state.camera.right = width / (2 * scale);
   state.camera.top = height / (2 * scale);

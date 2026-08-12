@@ -98,6 +98,13 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /mesh\.castShadow = true/, "every cube should cast a physical shadow");
   assert.match(component, /ground\.receiveShadow = true/, "the modeled ground plane should receive cube shadows");
   assert.match(component, /offsetZ: \(advance - ROLL_TURNS\) \* cubeSize/, "rolling cubes should translate one width per quarter turn");
+  assert.match(component, /function stickyRollEase/, "rolling cubes should use the reference-style viscous release and landing curve");
+  assert.match(component, /const ROLL_TIP_FRACTION = 0\.55/, "the sticky quarter-turn should spend longer in contact transition");
+  assert.match(component, /const ROLL_FINAL_HOLD = 1\.5/, "roll mode should reserve only a one-and-a-half-second final hold");
+  assert.match(component, /sequenceDuration - ROLL_FINAL_HOLD/, "the staggered roll should finish before the fixed final hold");
+  assert.match(component, /const ROLL_ZOOM_IN = 1\.07/, "the camera should reproduce the reference's subtle roll zoom-in");
+  assert.match(component, /const rollZoomProgress = settings\.mode === "roll"/, "only roll mode should animate the camera scale");
+  assert.match(component, /aspect > 1\.2 \? 1\.18/, "the widescreen field should match the reference cube count");
   assert.match(component, /const lanes = new Map/, "the 3D renderer should prevent rolling cubes from interpenetrating in shared lanes");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
