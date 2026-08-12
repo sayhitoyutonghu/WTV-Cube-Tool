@@ -103,7 +103,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /label="Roll turns" value=\{settings\.rollTurns\}/, "roll turns should be user-adjustable from one to four quarter-turns");
   assert.match(component, /function stickyRollEase/, "rolling cubes should use the reference-style viscous release and landing curve");
   assert.match(component, /const ROLL_TIP_FRACTION = 0\.55/, "the sticky quarter-turn should spend longer in contact transition");
-  assert.match(component, /const ROLL_FINAL_HOLD = 1\.5/, "roll mode should reserve only a one-and-a-half-second final hold");
+  assert.match(component, /const ROLL_FINAL_HOLD = 1;/, "roll mode should reserve only a one-second final hold");
   assert.match(component, /sequenceDuration - ROLL_FINAL_HOLD/, "the staggered roll should finish before the fixed final hold");
   assert.match(component, /const ROLL_ZOOM_IN = 1\.07/, "the camera should reproduce the reference's subtle roll zoom-in");
   assert.match(component, /const rollZoomProgress = settings\.mode === "roll"/, "only roll mode should animate the camera scale");

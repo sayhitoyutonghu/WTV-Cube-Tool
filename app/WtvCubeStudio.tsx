@@ -50,7 +50,7 @@ const SEQUENCE_END = 8.6;
 // face and lands with the marked face upright instead of repeatedly tumbling.
 const DEFAULT_ROLL_TURNS = 1;
 const ROLL_CYCLE = 1.35;
-const ROLL_FINAL_HOLD = 1.5;
+const ROLL_FINAL_HOLD = 1;
 // Measured from the reference's opening and settled frames: the cube faces
 // grow by roughly seven percent while the orbit stays locked. Keep the move
 // subtle and finish it with the rolling wave, before the final hold.
@@ -539,7 +539,7 @@ function getMotion(
     // rolling cube is always already square to the grid.
     const start = (stagger * ROLL_STAGGER) / alignSpeedScale;
     const cycle = ROLL_CYCLE;
-    // Reserve exactly the final 1.5 seconds for the completed tableau. The
+    // Reserve exactly the final second for the completed tableau. The
     // whole staggered wave is fitted into the remaining delivery time, so
     // changing Fall speed still changes the full duration without stretching
     // the end hold back out again.
