@@ -246,6 +246,7 @@ button { color: inherit; }
 
 .preset-grid, .segmented { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 18px; }
 .segmented.two { grid-template-columns: repeat(2, 1fr); }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
 .preset-grid button, .segmented button {
   min-height: 40px;
   border: 1px solid transparent;

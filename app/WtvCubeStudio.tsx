@@ -36,6 +36,7 @@ type Settings = {
   ink: string;
   logoText: string;
   subline: string;
+  shape: ShapeId;
   mode: MotionMode;
 };
 
@@ -903,7 +904,7 @@ type ThreeCube = {
   col: number;
   x: number;
   z: number;
-  mesh: THREE.Mesh<THREE.BoxGeometry, THREE.Material[]>;
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material[]>;
 };
 
 type ThreeSceneState = {
@@ -911,7 +912,7 @@ type ThreeSceneState = {
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
   cubes: ThreeCube[];
-  cubeGeometry: THREE.BoxGeometry | null;
+  cubeGeometry: THREE.BufferGeometry | null;
   cubeMaterials: THREE.Material[];
   brandTexture: THREE.CanvasTexture | null;
   groundGeometry: THREE.PlaneGeometry | null;
@@ -967,6 +968,177 @@ function createBrandTexture(settings: Settings, logo: HTMLCanvasElement | null) 
   return texture;
 }
 
+/* ── shapes ─────────────────────────────────────────────────────────
+ * Every solid is one outline extruded along x, because +x is the face the mark
+ * sits on. The cube keeps its own BoxGeometry rather than being expressed as a
+ * four-sided prism, so switching shapes cannot change what the default
+ * renders. The others are turned so their marked cap lands on +x too.
+ */
+type ShapeId = "cube" | "circle" | "star" | "triangle";
+
+const SHAPE_LABELS: Record<ShapeId, string> = {
+  cube: "Cube",
+  circle: "Circle",
+  star: "Star",
+  triangle: "Triangle",
+};
+
+// Outline radius as a fraction of half the cube size, tuned so each shape
+// carries about the same visual weight as the cube it replaces.
+const SHAPE_RADIUS: Record<ShapeId, number> = {
+  cube: 1,
+  circle: 1.04,
+  star: 1.36,
+  triangle: 1.42,
+};
+
+function starOutline(points: number, outer: number, inner: number) {
+  const path = new THREE.Shape();
+  for (let index = 0; index < points * 2; index += 1) {
+    // Start at the top so the star stands on two points rather than balancing.
+    const angle = Math.PI / 2 + (index * Math.PI) / points;
+    const radius = index % 2 === 0 ? outer : inner;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    if (index === 0) path.moveTo(x, y);
+    else path.lineTo(x, y);
+  }
+  path.closePath();
+  return path;
+}
+
+function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry {
+  const half = size / 2;
+  if (shape === "cube") return new THREE.BoxGeometry(size, size, size);
+
+  if (shape === "star") {
+    const radius = half * SHAPE_RADIUS.star;
+    const geometry = new THREE.ExtrudeGeometry(
+      starOutline(5, radius, radius * 0.42),
+      { depth: size, bevelEnabled: false, curveSegments: 1 },
+    );
+    // Extrusion runs along +z; centre it, then turn that axis onto +x.
+    geometry.translate(0, 0, -half);
+    geometry.rotateY(Math.PI / 2);
+    return geometry;
+  }
+
+  // Circle and triangle are both cylinders — one with enough segments to read
+  // as round, one with exactly three.
+  const segments = shape === "circle" ? 40 : 3;
+  const radius = half * SHAPE_RADIUS[shape];
+  // A cylinder's first vertex sits at thetaStart; put a flat side down for the
+  // triangle so it rests on its base instead of a point.
+  const thetaStart = shape === "triangle" ? Math.PI / 6 : 0;
+  const geometry = new THREE.CylinderGeometry(radius, radius, size, segments, 1, false, thetaStart);
+  // The cylinder runs along +y; turn its top cap onto +x.
+  geometry.rotateZ(-Math.PI / 2);
+  return geometry;
+}
+
+/* Each geometry type orders its material groups differently, and an extrusion's
+ * order also depends on how it was built. Rather than keep a table of slots per
+ * shape — which is what kept putting the mark on a wall — ask the geometry which
+ * group actually sits on the +x cap. */
+function markedGroupIndex(geometry: THREE.BufferGeometry, half: number): number {
+  const position = geometry.getAttribute("position");
+  const index = geometry.getIndex();
+  if (!position || geometry.groups.length === 0) return 0;
+  const vertexAt = (slot: number) => (index ? index.getX(slot) : slot);
+  const tolerance = half * 0.02;
+  let best = 0;
+  let bestShare = -1;
+  geometry.groups.forEach((group, groupIndex) => {
+    const limit = group.start + group.count;
+    let onCap = 0;
+    let sampled = 0;
+    for (let slot = group.start; slot < limit; slot += 3) {
+      const vertex = vertexAt(slot);
+      if (vertex >= position.count) continue;
+      sampled += 1;
+      if (Math.abs(position.getX(vertex) - half) <= tolerance) onCap += 1;
+    }
+    const share = sampled > 0 ? onCap / sampled : 0;
+    if (share > bestShare) {
+      bestShare = share;
+      best = groupIndex;
+    }
+  });
+  return bestShare > 0.6 ? best : 0;
+}
+
+function shapeMaterials(geometry: THREE.BufferGeometry, half: number, marked: THREE.Material, plain: THREE.Material): THREE.Material[] {
+  const slots = Math.max(1, geometry.groups.length);
+  const markedSlot = markedGroupIndex(geometry, half);
+  return Array.from({ length: slots }, (_, slot) => (slot === markedSlot ? marked : plain));
+}
+
+// How much of the outline the mark is allowed to cover, so the artwork always
+// lands inside the narrowest part of the shape.
+const MARK_SCALE: Record<ShapeId, number> = {
+  cube: 1,
+  circle: 0.74,
+  star: 0.5,
+  triangle: 0.58,
+};
+
+/* Each geometry type lays its UVs out differently — a cylinder maps its cap as
+ * seen from above, and an extrusion uses world units outright, which blows the
+ * texture up far past the shape. Rather than chase per-type flips, rewrite the
+ * UVs on the +x cap from the vertex positions: u across -z, v up +y, scaled to
+ * the mark's square. That is the same mapping the box's +x face already has, so
+ * every shape carries the artwork identically. */
+function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number) {
+  if (shape === "cube") return;
+  const position = geometry.getAttribute("position");
+  const uv = geometry.getAttribute("uv");
+  if (!position || !uv) return;
+  const markHalf = half * MARK_SCALE[shape];
+  for (let index = 0; index < position.count; index += 1) {
+    const x = position.getX(index);
+    // Only the cap facing the camera-right carries the mark; leave the walls
+    // and the far cap with whatever they had.
+    if (Math.abs(x - half) > half * 0.02) continue;
+    const z = position.getZ(index);
+    const y = position.getY(index);
+    uv.setXY(index, 0.5 - z / (markHalf * 2), 0.5 + y / (markHalf * 2));
+  }
+  uv.needsUpdate = true;
+}
+
+// Corners used to sit the solid on the ground. The renderer drops each object
+// until its lowest rotated point touches, so this has to follow the outline
+// rather than stay a cube.
+function shapeContactPoints(shape: ShapeId, half: number): Vec3[] {
+  if (shape === "cube") {
+    return [
+      { x: -half, y: -half, z: -half }, { x: half, y: -half, z: -half },
+      { x: half, y: -half, z: half }, { x: -half, y: -half, z: half },
+      { x: -half, y: half, z: -half }, { x: half, y: half, z: -half },
+      { x: half, y: half, z: half }, { x: -half, y: half, z: half },
+    ];
+  }
+  const radius = half * SHAPE_RADIUS[shape];
+  const points: Vec3[] = [];
+  if (shape === "star") {
+    for (let index = 0; index < 10; index += 1) {
+      const angle = Math.PI / 2 + (index * Math.PI) / 5;
+      const r = index % 2 === 0 ? radius : radius * 0.42;
+      points.push({ x: half, y: Math.sin(angle) * r, z: Math.cos(angle) * r });
+      points.push({ x: -half, y: Math.sin(angle) * r, z: Math.cos(angle) * r });
+    }
+    return points;
+  }
+  const segments = shape === "circle" ? 24 : 3;
+  const thetaStart = shape === "triangle" ? Math.PI / 6 : 0;
+  for (let index = 0; index < segments; index += 1) {
+    const angle = thetaStart + (index * Math.PI * 2) / segments;
+    points.push({ x: half, y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
+    points.push({ x: -half, y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
+  }
+  return points;
+}
+
 function clearThreeScene(state: ThreeSceneState) {
   state.scene.clear();
   state.cubeGeometry?.dispose();
@@ -1017,15 +1189,9 @@ function buildThreeScene(
     roughness: 0.92,
     metalness: 0,
   });
-  const cubeMaterials: THREE.Material[] = [
-    markedMaterial,
-    faceMaterial,
-    faceMaterial,
-    faceMaterial,
-    faceMaterial,
-    faceMaterial,
-  ];
-  const cubeGeometry = new THREE.BoxGeometry(settings.cubeSize, settings.cubeSize, settings.cubeSize);
+  const cubeGeometry = buildShapeGeometry(settings.shape, settings.cubeSize);
+  applyCapUVs(cubeGeometry, settings.shape, settings.cubeSize / 2);
+  const cubeMaterials = shapeMaterials(cubeGeometry, settings.cubeSize / 2, markedMaterial, faceMaterial);
   const stride = columns + 3;
   const margin = settings.mode === "roll"
     ? Math.ceil((settings.rollTurns * settings.cubeSize) / spacing) + 1
@@ -1137,6 +1303,7 @@ function drawScene(
     canvas.height,
     settings.density,
     settings.cubeSize,
+    settings.shape,
     settings.mode,
     settings.rollTurns,
     settings.background,
@@ -1176,16 +1343,7 @@ function drawScene(
   state.camera.updateProjectionMatrix();
 
   const half = settings.cubeSize / 2;
-  const localVertices: Vec3[] = [
-    { x: -half, y: -half, z: -half },
-    { x: half, y: -half, z: -half },
-    { x: half, y: -half, z: half },
-    { x: -half, y: -half, z: half },
-    { x: -half, y: half, z: -half },
-    { x: half, y: half, z: -half },
-    { x: half, y: half, z: half },
-    { x: -half, y: half, z: half },
-  ];
+  const localVertices = shapeContactPoints(settings.shape, half);
   const cubeFrames = state.cubes.map((cube) => {
     const movement = getMotion(
       cube.index,
@@ -1328,6 +1486,7 @@ export default function WtvCubeStudio() {
     ink: "#111111",
     logoText: "WTV",
     subline: "MUSIC",
+    shape: "cube",
     mode: "roll",
   });
 
@@ -1691,9 +1850,25 @@ export default function WtvCubeStudio() {
             <ColorControl label="Logo / ink" value={settings.ink} onChange={(value) => updateSetting("ink", value)} />
           </PanelSection>
 
+          <PanelSection title="Shape" value={SHAPE_LABELS[settings.shape]}>
+            <div className="segmented four">
+              {(Object.keys(SHAPE_LABELS) as ShapeId[]).map((shape) => (
+                <button
+                  key={shape}
+                  type="button"
+                  className={settings.shape === shape ? "active" : ""}
+                  onClick={() => updateSetting("shape", shape)}
+                >
+                  {SHAPE_LABELS[shape]}
+                </button>
+              ))}
+            </div>
+            <p className="camera-help">The mark stays on the face angled to the right of screen, whatever the outline.</p>
+          </PanelSection>
+
           <PanelSection title="Grid" value={`${settings.density} \u00d7 ${settings.cubeSize}px`}>
             <RangeControl label="Density" value={settings.density} min={4} max={10} onChange={(value) => updateSetting("density", value)} />
-            <RangeControl label="Cube size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
+            <RangeControl label="Size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
           </PanelSection>
 
           <PanelSection title="Motion" value={settings.mode === "settle" ? "Drop" : "Roll"}>
