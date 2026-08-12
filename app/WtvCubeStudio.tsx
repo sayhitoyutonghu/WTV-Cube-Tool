@@ -39,6 +39,8 @@ type Settings = {
 };
 
 const MAX_DURATION = 10;
+const MIN_SEQUENCE_DURATION = 3;
+const MAX_SEQUENCE_DURATION = 20;
 const EXPORT_FPS = 30;
 // Simulation time by which every mode has come to rest, leaving a beat of held
 // frames before the loop point.
@@ -89,11 +91,11 @@ const PRESETS: Record<string, Partial<Settings>> = {
   Reference: {
     density: 7,
     cubeSize: 76,
-    sequenceDuration: 6,
+    sequenceDuration: 12,
     motion: 64,
     gravity: 100,
     bounce: 52,
-    speed: 1,
+    speed: 0.5,
     alignSpeed: 2.4,
     shadow: 48,
     cameraYaw: REFERENCE_CAMERA_YAW,
@@ -481,7 +483,6 @@ function getMotion(
   amount: number,
   gravity: number,
   bounce: number,
-  speed: number,
   alignSpeed: number,
   sequenceDuration: number,
   cubeSize: number,
@@ -490,11 +491,11 @@ function getMotion(
   const strength = amount / 100;
   const gravityScale = clamp(gravity / 100, 0.4, 1.8);
   const restitution = clamp(bounce / 100, 0, 1);
-  const speedScale = clamp(speed, 0.35, 1.8);
   const alignSpeedScale = clamp(alignSpeed, 0.75, 4);
-  // Sequence time compresses the same physically-shaped ten-second simulation
-  // into the selected delivery duration instead of simply cutting it off.
-  const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, 3, MAX_DURATION));
+  // Fall speed is implemented as timeline retiming, so the same complete
+  // physical performance is preserved at every speed. The selected sequence
+  // duration is the real playback and export duration, not a fixed cutoff.
+  const simulationTime = time * (MAX_DURATION / clamp(sequenceDuration, MIN_SEQUENCE_DURATION, MAX_SEQUENCE_DURATION));
 
   if (mode === "roll") {
     // The reference tips its cubes about a bottom edge rather than dropping
@@ -509,7 +510,7 @@ function getMotion(
     // Face align tightens the wave here rather than reorienting cubes, since a
     // rolling cube is always already square to the grid.
     const start = (stagger * ROLL_STAGGER) / alignSpeedScale;
-    const cycle = ROLL_CYCLE / speedScale;
+    const cycle = ROLL_CYCLE;
     // Every cube rolls one way and keeps going, as the footage does. Rolling out
     // and back reads as cubes tipping in both directions, which is wrong.
     const local = clamp(simulationTime - start, 0, ROLL_TURNS * cycle);
@@ -544,10 +545,10 @@ function getMotion(
   // The loop begins with every cube suspended above its final grid position.
   // Seeded release timing creates the selected drop pattern without changing
   // the deterministic, perfectly aligned end frame.
-  let delay = 0.08 + random * 1.2;
+  const delay = 0.08 + random * 1.2;
 
   const dropHeight = 6.2 + hash(index + 8, seed) * 7.4;
-  const acceleration = 7.2 * gravityScale * speedScale;
+  const acceleration = 7.2 * gravityScale;
   const fallDuration = Math.sqrt((2 * dropHeight) / acceleration);
   const local = simulationTime - delay;
   const fallProgress = clamp(local / fallDuration, 0, 1);
@@ -617,6 +618,9 @@ function getMotion(
   };
 }
 
+// Kept as a deterministic Canvas 2D fallback for browsers that cannot create
+// a WebGL renderer, even though the current runtime takes the Three.js path.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function drawScene2dLegacy(
   canvas: HTMLCanvasElement,
   settings: Settings,
@@ -726,7 +730,6 @@ function drawScene2dLegacy(
       settings.motion,
       settings.gravity,
       settings.bounce,
-      settings.speed,
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
@@ -772,7 +775,6 @@ function drawScene2dLegacy(
       settings.motion,
       settings.gravity,
       settings.bounce,
-      settings.speed,
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
@@ -1145,7 +1147,6 @@ function drawScene(
       settings.motion,
       settings.gravity,
       settings.bounce,
-      settings.speed,
       settings.alignSpeed,
       settings.sequenceDuration,
       settings.cubeSize,
@@ -1244,6 +1245,9 @@ export default function WtvCubeStudio() {
   const lastFrameRef = useRef<number>(0);
   const playheadRef = useRef(0);
   const logoRef = useRef<HTMLCanvasElement | null>(null);
+  // The duration at 1x is kept separately so dragging the speed slider back
+  // and forth never accumulates rounding errors in the displayed half-seconds.
+  const baseSequenceDurationRef = useRef(6);
   const cameraDragRef = useRef<{ pointerId: number; startX: number; startY: number; yaw: number; pitch: number } | null>(null);
   const [playing, setPlaying] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -1257,11 +1261,11 @@ export default function WtvCubeStudio() {
   const [settings, setSettings] = useState<Settings>({
     density: 7,
     cubeSize: 76,
-    sequenceDuration: 6,
+    sequenceDuration: 12,
     motion: 64,
     gravity: 100,
     bounce: 52,
-    speed: 1,
+    speed: 0.5,
     alignSpeed: 2.4,
     shadow: 48,
     cameraYaw: REFERENCE_CAMERA_YAW,
@@ -1279,7 +1283,21 @@ export default function WtvCubeStudio() {
   const ratioClass = aspect.replace(":", "-");
 
   const updateSetting = useCallback(<K extends keyof Settings>(key: K, value: Settings[K]) => {
-    setSettings((current) => ({ ...current, [key]: value }));
+    setSettings((current) => {
+      if (key === "speed") {
+        const nextSpeed = value as number;
+        const nextDuration = clamp(
+          Math.round((baseSequenceDurationRef.current / nextSpeed) * 2) / 2,
+          MIN_SEQUENCE_DURATION,
+          MAX_SEQUENCE_DURATION,
+        );
+        return { ...current, speed: nextSpeed, sequenceDuration: nextDuration };
+      }
+      if (key === "sequenceDuration") {
+        baseSequenceDurationRef.current = (value as number) * current.speed;
+      }
+      return { ...current, [key]: value };
+    });
     setPreset("Custom");
   }, []);
 
@@ -1353,7 +1371,11 @@ export default function WtvCubeStudio() {
 
   const applyPreset = (name: string) => {
     const values = PRESETS[name];
-    setSettings((current) => ({ ...current, ...values }));
+    setSettings((current) => {
+      const next = { ...current, ...values };
+      baseSequenceDurationRef.current = next.sequenceDuration * next.speed;
+      return next;
+    });
     setPreset(name);
     setTimeline(0);
   };
@@ -1626,7 +1648,7 @@ export default function WtvCubeStudio() {
             <div className="segmented two">
               {(["settle", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "Drop" : "Roll"}</button>)}
             </div>
-            <RangeControl label="Sequence time" value={settings.sequenceDuration} min={3} max={10} step={0.5} suffix=" s" onChange={(value) => updateSetting("sequenceDuration", value)} />
+            <RangeControl label="Sequence time" value={settings.sequenceDuration} min={MIN_SEQUENCE_DURATION} max={MAX_SEQUENCE_DURATION} step={0.5} suffix=" s" onChange={(value) => updateSetting("sequenceDuration", value)} />
             <RangeControl label="Gravity" value={settings.gravity} min={45} max={170} suffix="%" onChange={(value) => updateSetting("gravity", value)} />
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />

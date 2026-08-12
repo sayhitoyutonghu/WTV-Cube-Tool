@@ -75,9 +75,12 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /backgroundMask/, "opaque white backgrounds should be removed from the edges only");
   assert.match(component, /cameraVector\(settings\.cameraYaw, settings\.cameraPitch\)/, "camera controls should drive projection");
   assert.match(component, /const MAX_DURATION = 10/, "the motion model should retain a ten-second reference simulation");
-  assert.match(component, /sequenceDuration: 6/, "the default sequence should settle faster than the old ten-second version");
-  assert.match(component, /const simulationTime = time \* \(MAX_DURATION \/ clamp\(sequenceDuration, 3, MAX_DURATION\)\)/, "the duration control should time-compress the complete physics sequence");
-  assert.match(component, /const acceleration = 7\.2 \* gravityScale \* speedScale/, "falling cubes should use gravity-driven acceleration");
+  assert.match(component, /sequenceDuration: 12/, "the slower reference default should expose its complete twelve-second sequence");
+  assert.match(component, /speed: 0\.5/, "the reference motion should default to the calmer half-speed shown in the control reference");
+  assert.match(component, /baseSequenceDurationRef/, "speed changes should retime the complete sequence instead of cutting it off");
+  assert.match(component, /baseSequenceDurationRef\.current \/ nextSpeed/, "lower speed should proportionally increase the playback and export duration");
+  assert.match(component, /const simulationTime = time \* \(MAX_DURATION \/ clamp\(sequenceDuration, MIN_SEQUENCE_DURATION, MAX_SEQUENCE_DURATION\)\)/, "the displayed duration should time-stretch the complete physics sequence");
+  assert.match(component, /const acceleration = 7\.2 \* gravityScale/, "falling cubes should keep the same physical arc while timeline speed changes");
   assert.match(component, /const alignSpeedScale = clamp\(alignSpeed, 0\.75, 4\)/, "face alignment should have an independent speed control");
   assert.match(component, /label="Face align" value=\{settings\.alignSpeed\}/, "the face alignment speed controller should be visible");
   assert.match(component, /const alignDuration = Math\.max\(0\.22, \(settleEnd - impactTime\) \/ alignSpeedScale\)/, "alignment speed should shorten only the post-impact convergence");
@@ -85,7 +88,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const SEQUENCE_END = 8\.6/, "the reference simulation should converge before the selected end frame");
   assert.match(component, /cameraZoom: clamp\(current\.cameraZoom/, "scrolling the preview should control camera zoom");
   assert.match(component, /onPointerMove=\{moveCamera\}/, "dragging the preview should orbit the camera");
-  assert.doesNotMatch(component, /time \* settings\.speed/, "speed should shape gravity without preventing the fixed ten-second convergence");
+  assert.doesNotMatch(component, /time \* settings\.speed/, "speed should retime the full sequence rather than truncate its physics");
   assert.match(component, /minimumLocalY/, "rotating cubes should maintain physical ground contact");
   assert.match(component, /new THREE\.WebGLRenderer/, "the preview should be rendered as a real 3D scene");
   assert.match(component, /THREE\.VSMShadowMap/, "the 3D scene should use soft variance shadow maps");
