@@ -13,9 +13,28 @@ import {
 import * as THREE from "three";
 
 type Aspect = "16:9" | "9:16" | "1:1";
-type MotionMode = "settle" | "roll";
+type MotionMode = "settle" | "roll" | "spin" | "pop" | "flip";
 type Vec3 = { x: number; y: number; z: number };
 type Vec2 = { x: number; y: number };
+type MotionPose = {
+  rx: number;
+  ry: number;
+  rz: number;
+  lift: number;
+  offsetX: number;
+  offsetZ: number;
+  scale: number;
+  // Flip: after the edge-on midpoint the cell shows its end shape.
+  revealed: boolean;
+};
+
+const MOTION_LABELS: Record<MotionMode, string> = {
+  settle: "Drop",
+  roll: "Roll",
+  spin: "Spin",
+  pop: "Pop",
+  flip: "Flip",
+};
 
 type Settings = {
   density: number;
@@ -37,6 +56,7 @@ type Settings = {
   logoText: string;
   subline: string;
   shape: ShapeId;
+  shapeB: ShapeId;
   mode: MotionMode;
 };
 
@@ -500,6 +520,26 @@ function drawMark(
   ctx.restore();
 }
 
+function waveStagger(col: number, row: number, random: number) {
+  return (((col * 0.64 + row * 0.31 + random * ROLL_SCATTER) % 1) + 1) % 1;
+}
+
+function waveLocalTime(
+  time: number,
+  sequenceDuration: number,
+  alignSpeed: number,
+  stagger: number,
+  cycle: number,
+  staggerSpan = ROLL_STAGGER,
+) {
+  const alignSpeedScale = clamp(alignSpeed, 0.75, 4);
+  const start = (stagger * staggerSpan) / alignSpeedScale;
+  const activeDuration = Math.max(0.5, sequenceDuration - ROLL_FINAL_HOLD);
+  const simulationEnd = staggerSpan / alignSpeedScale + cycle;
+  const simulationTime = clamp(time / activeDuration, 0, 1) * simulationEnd;
+  return { local: simulationTime - start, cycle, start };
+}
+
 function getMotion(
   index: number,
   row: number,
@@ -514,7 +554,7 @@ function getMotion(
   sequenceDuration: number,
   cubeSize: number,
   rollTurns: number,
-) {
+): MotionPose {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
   const gravityScale = clamp(gravity / 100, 0.4, 1.8);
@@ -535,7 +575,7 @@ function getMotion(
     // tipping reads as a wave rolling through a settled field.
     // Columns run negative on the run-up side, so fold the phase back into
     // [0,1) rather than letting those cubes start before the sequence does.
-    const stagger = (((col * 0.64 + row * 0.31 + random * ROLL_SCATTER) % 1) + 1) % 1;
+    const stagger = waveStagger(col, row, random);
     // Face align tightens the wave here rather than reorienting cubes, since a
     // rolling cube is always already square to the grid.
     const start = (stagger * ROLL_STAGGER) / alignSpeedScale;
@@ -577,7 +617,72 @@ function getMotion(
       // Measure back from the finished grid, so the single physical tip carries
       // the cube into its final lattice position with the mark upright.
       offsetZ: (advance - turnCount) * cubeSize,
+      scale: 1,
+      revealed: false,
     };
+  }
+
+  // Spin and pop are silhouette-safe: they never tip about a square edge the
+  // way Roll does, so circle / star / triangle keep contact and mark facing.
+  if (mode === "spin") {
+    const turns = clamp(Math.round(rollTurns), 1, 4);
+    const stagger = waveStagger(col, row, random);
+    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, 1.15);
+    const tip = clamp(local / (cycle * 0.9), 0, 1);
+    const eased = tip * tip * (3 - 2 * tip);
+    // Rotate about the mark normal so the artwork stays camera-right while the
+    // outline twirls — a coin spin rather than a cube tip.
+    return {
+      rx: (1 - eased) * turns * Math.PI * 2,
+      ry: 0,
+      rz: 0,
+      lift: 0,
+      offsetX: 0,
+      offsetZ: 0,
+      scale: 1,
+      revealed: false,
+    };
+  }
+
+  if (mode === "pop") {
+    const stagger = waveStagger(col, row, random);
+    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, 0.95, ROLL_STAGGER * 0.62);
+    if (local <= 0) {
+      return { rx: 0, ry: 0, rz: 0, lift: 0.28, offsetX: 0, offsetZ: 0, scale: 0.001, revealed: false };
+    }
+    const tip = clamp(local / cycle, 0, 1);
+    // Overshoot then settle: graphic stamp rather than soft fade-in.
+    let scale = 1;
+    if (tip < 0.58) {
+      const t = tip / 0.58;
+      scale = t * t * 1.14;
+    } else if (tip < 0.82) {
+      const t = (tip - 0.58) / 0.24;
+      scale = 1.14 - t * 0.18;
+    } else {
+      const t = (tip - 0.82) / 0.18;
+      scale = 0.96 + t * t * (3 - 2 * t) * 0.04;
+    }
+    const lift = tip < 0.5 ? (1 - tip / 0.5) * 0.32 : 0;
+    return { rx: 0, ry: 0, rz: 0, lift, offsetX: 0, offsetZ: 0, scale: Math.max(0.001, scale), revealed: false };
+  }
+
+  // Card flip: turn to edge-on, swap silhouette, open onto the other shape.
+  // Checkerboard cells start on opposite members of the A/B pair so both
+  // outlines trade places as the wave crosses — the Hasselrot-style reveal.
+  if (mode === "flip") {
+    const stagger = waveStagger(col, row, random);
+    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, 1.05);
+    const tip = clamp(local / cycle, 0, 1);
+    const eased = tip * tip * (3 - 2 * tip);
+    const revealed = eased >= 0.5;
+    // +90° then −90°→0 keeps the mark on +x at rest; the jump at the midpoint
+    // is hidden while the cell is edge-on.
+    const ry = revealed
+      ? -((1 - eased) / 0.5) * (Math.PI / 2)
+      : (eased / 0.5) * (Math.PI / 2);
+    const lift = Math.sin(eased * Math.PI) * 0.42;
+    return { rx: 0, ry, rz: 0, lift, offsetX: 0, offsetZ: 0, scale: 1, revealed };
   }
 
   // The loop begins with every cube suspended above its final grid position.
@@ -623,6 +728,8 @@ function getMotion(
       lift: dropHeight,
       offsetX: initialOffsetX,
       offsetZ: initialOffsetZ,
+      scale: 1,
+      revealed: false,
     };
   }
 
@@ -634,6 +741,8 @@ function getMotion(
       lift: Math.max(0, dropHeight - 0.5 * acceleration * local * local),
       offsetX: initialOffsetX * (1 - fallProgress * 0.18) + driftX * fallProgress,
       offsetZ: initialOffsetZ * (1 - fallProgress * 0.18) + driftZ * fallProgress,
+      scale: 1,
+      revealed: false,
     };
   }
 
@@ -653,6 +762,8 @@ function getMotion(
     lift: rebound,
     offsetX: (impactOffsetX + rocking * 18) * remaining,
     offsetZ: (impactOffsetZ - rocking * 14) * remaining,
+    scale: 1,
+    revealed: false,
   };
 }
 
@@ -689,9 +800,7 @@ function drawScene2dLegacy(
   // A quarter turn carries a cube a full cube width, so a rolled cube lands on
   // top of a neighbour that has not moved yet unless the lattice is more than
   // two cubes wide. Framing compensates, so the field reads the same size.
-  const spacing = settings.mode === "roll"
-    ? Math.max(BASE_SPACING, settings.cubeSize * ROLL_SPACING)
-    : BASE_SPACING;
+  const spacing = gridSpacing(settings.shape, settings.shapeB, settings.cubeSize, settings.mode);
   // Frame from the base pitch, never the rolling one. Deriving the camera from
   // the widened lattice pulls it back and halves the cubes on screen; measured
   // against the reference footage they should stay the size the other modes
@@ -904,6 +1013,10 @@ type ThreeCube = {
   col: number;
   x: number;
   z: number;
+  startShape: ShapeId;
+  endShape: ShapeId;
+  contactStart: Vec3[];
+  contactEnd: Vec3[];
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material[]>;
 };
 
@@ -914,6 +1027,8 @@ type ThreeSceneState = {
   cubes: ThreeCube[];
   cubeGeometry: THREE.BufferGeometry | null;
   cubeMaterials: THREE.Material[];
+  geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>>;
+  materialsByShape: Partial<Record<ShapeId, THREE.Material[]>>;
   brandTexture: THREE.CanvasTexture | null;
   groundGeometry: THREE.PlaneGeometry | null;
   groundMaterial: THREE.MeshStandardMaterial | null;
@@ -973,6 +1088,9 @@ function createBrandTexture(settings: Settings, logo: HTMLCanvasElement | null) 
  * sits on. The cube keeps its own BoxGeometry rather than being expressed as a
  * four-sided prism, so switching shapes cannot change what the default
  * renders. The others are turned so their marked cap lands on +x too.
+ *
+ * Mark UVs are fitted per outline so logo + MUSIC never clip. Shapes grow first;
+ * the lockup only scales down when the silhouette still cannot hold cube size.
  */
 type ShapeId = "cube" | "circle" | "star" | "triangle";
 
@@ -983,14 +1101,27 @@ const SHAPE_LABELS: Record<ShapeId, string> = {
   triangle: "Triangle",
 };
 
-// Outline radius as a fraction of half the cube size, tuned so each shape
-// carries about the same visual weight as the cube it replaces.
+// Outline radius as a fraction of half the cube size. Grown so a near-cube mark
+// clears the silhouette; applyCapUVs still shrinks per-shape if needed.
 const SHAPE_RADIUS: Record<ShapeId, number> = {
   cube: 1,
-  circle: 1.04,
-  star: 1.36,
-  triangle: 1.42,
+  circle: 1.25,
+  star: 1.2,
+  triangle: 1.15,
 };
+
+// A standard five-point ratio. It was set to 0.68 to stop the notches from
+// cutting the MTV lockup, but at that ratio the inner and outer radii sit so
+// close together that the outline reads as a lumpy decagon, not a star —
+// confirmed by screenshot, not just by the numbers. markHalfForShape already
+// exists to solve exactly this trade-off: it shrinks the mark, not the star.
+const STAR_INNER_RATIO = 0.44;
+
+// Artwork bounds in face UV that must stay inside the outline (logo + MUSIC).
+// Yellow face corners may clip; the lockup must not.
+const MARK_CONTENT = { u0: 0.12, u1: 0.88, v0: 0.08, v1: 0.90 };
+// Extra inset so type does not kiss the silhouette the way the screenshots did.
+const MARK_SILHOUETTE_PAD = 0.9;
 
 function starOutline(points: number, outer: number, inner: number) {
   const path = new THREE.Shape();
@@ -1007,33 +1138,188 @@ function starOutline(points: number, outer: number, inner: number) {
   return path;
 }
 
+type TriangleDims = { top: number; bottom: number; base: number };
+
+// A true equilateral triangle, apex up, inscribed in a circle of this radius
+// — the earlier "broad shield" (top 1.6·half, bottom 1.1·half, base 3.4·half)
+// widened the base far past the top specifically to keep the MTV lockup from
+// clipping, but the result reads as a wide flat dart rather than a triangle.
+// markHalfForShape already shrinks the mark to whatever the outline allows;
+// let the outline be a triangle and the mark give way, not the other way
+// round.
+function triangleDims(half: number): TriangleDims {
+  const radius = half * SHAPE_RADIUS.triangle;
+  return {
+    top: radius,
+    bottom: radius * 0.5,
+    base: radius * 0.866, // radius * sin(60°)
+  };
+}
+
+// Corner radius as a fraction of the triangle's own radius. Small enough to
+// leave the silhouette reading as a triangle, large enough that the tips
+// don't present as needle-thin slivers when a corner catches the camera.
+const TRIANGLE_CORNER_RATIO = 0.16;
+
+// A regular polygon with each corner rounded by a quadratic curve toward the
+// vertex — the cheap approximation of a tangent-arc fillet, close enough at
+// this size and a fraction of the construction a true arc would take.
+function roundedOutline(vertices: Array<{ x: number; y: number }>, cornerRadius: number) {
+  const path = new THREE.Shape();
+  const count = vertices.length;
+  for (let index = 0; index < count; index += 1) {
+    const previous = vertices[(index - 1 + count) % count];
+    const current = vertices[index];
+    const next = vertices[(index + 1) % count];
+    const towardPrevious = { x: previous.x - current.x, y: previous.y - current.y };
+    const towardNext = { x: next.x - current.x, y: next.y - current.y };
+    const lenPrev = Math.hypot(towardPrevious.x, towardPrevious.y) || 1;
+    const lenNext = Math.hypot(towardNext.x, towardNext.y) || 1;
+    const unitPrev = { x: towardPrevious.x / lenPrev, y: towardPrevious.y / lenPrev };
+    const unitNext = { x: towardNext.x / lenNext, y: towardNext.y / lenNext };
+    const cos = unitPrev.x * unitNext.x + unitPrev.y * unitNext.y;
+    const halfAngle = Math.acos(Math.max(-1, Math.min(1, cos))) / 2;
+    // Distance back from the vertex to the tangent point.
+    const setback = Math.min(lenPrev, lenNext, cornerRadius / Math.tan(halfAngle));
+    const start = { x: current.x + unitPrev.x * setback, y: current.y + unitPrev.y * setback };
+    const end = { x: current.x + unitNext.x * setback, y: current.y + unitNext.y * setback };
+    if (index === 0) path.moveTo(start.x, start.y);
+    else path.lineTo(start.x, start.y);
+    path.quadraticCurveTo(current.x, current.y, end.x, end.y);
+  }
+  path.closePath();
+  return path;
+}
+
+function triangleOutline(half: number) {
+  const { top, bottom, base } = triangleDims(half);
+  return roundedOutline(
+    [
+      { x: 0, y: top },
+      { x: base, y: -bottom },
+      { x: -base, y: -bottom },
+    ],
+    half * SHAPE_RADIUS.triangle * TRIANGLE_CORNER_RATIO,
+  );
+}
+
+function pointInTriangle(y: number, z: number, dims: TriangleDims) {
+  if (y > dims.top * MARK_SILHOUETTE_PAD || y < -dims.bottom * MARK_SILHOUETTE_PAD) return false;
+  const width = dims.base * ((dims.top - y) / (dims.top + dims.bottom));
+  return Math.abs(z) <= width * MARK_SILHOUETTE_PAD;
+}
+
+function pointInStar(y: number, z: number, outer: number, inner: number) {
+  // Test against a padded-in copy of the mesh outline so type clears the notches.
+  const scale = MARK_SILHOUETTE_PAD;
+  const vertices: Array<{ y: number; z: number }> = [];
+  for (let index = 0; index < 10; index += 1) {
+    const angle = Math.PI / 2 + (index * Math.PI) / 5;
+    const radius = (index % 2 === 0 ? outer : inner) * scale;
+    vertices.push({ y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
+  }
+  let inside = false;
+  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i, i += 1) {
+    const yi = vertices[i].y;
+    const zi = vertices[i].z;
+    const yj = vertices[j].y;
+    const zj = vertices[j].z;
+    const intersect = yi > y !== yj > y && z < ((zj - zi) * (y - yi)) / (yj - yi) + zi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInCircle(y: number, z: number, radius: number) {
+  return y * y + z * z <= (radius * MARK_SILHOUETTE_PAD) ** 2;
+}
+
+function contentFits(shape: ShapeId, half: number, markHalf: number) {
+  const samples: Array<{ u: number; v: number }> = [];
+  const steps = 6;
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const u = MARK_CONTENT.u0 + (MARK_CONTENT.u1 - MARK_CONTENT.u0) * t;
+    const v = MARK_CONTENT.v0 + (MARK_CONTENT.v1 - MARK_CONTENT.v0) * t;
+    samples.push({ u, v: MARK_CONTENT.v0 }, { u, v: MARK_CONTENT.v1 });
+    samples.push({ u: MARK_CONTENT.u0, v }, { u: MARK_CONTENT.u1, v });
+  }
+  // Corners of the lockup matter most for clipping.
+  samples.push(
+    { u: MARK_CONTENT.u0, v: MARK_CONTENT.v0 },
+    { u: MARK_CONTENT.u1, v: MARK_CONTENT.v0 },
+    { u: MARK_CONTENT.u0, v: MARK_CONTENT.v1 },
+    { u: MARK_CONTENT.u1, v: MARK_CONTENT.v1 },
+  );
+
+  const dims = triangleDims(half);
+  const starOuter = half * SHAPE_RADIUS.star;
+  const starInner = starOuter * STAR_INNER_RATIO;
+  const circleRadius = half * SHAPE_RADIUS.circle;
+
+  for (const sample of samples) {
+    const z = (0.5 - sample.u) * markHalf * 2;
+    const y = (sample.v - 0.5) * markHalf * 2;
+    if (shape === "circle") {
+      if (!pointInCircle(y, z, circleRadius)) return false;
+    } else if (shape === "triangle") {
+      if (!pointInTriangle(y, z, dims)) return false;
+    } else if (shape === "star") {
+      if (!pointInStar(y, z, starOuter, starInner)) return false;
+    }
+  }
+  return true;
+}
+
+/* Largest mark half-extent where the lockup stays inside the silhouette.
+ * Cube stays at `half`. Others shrink only as far as their outline requires. */
+function markHalfForShape(shape: ShapeId, half: number) {
+  if (shape === "cube") return half;
+  let lo = half * 0.35;
+  let hi = half;
+  if (contentFits(shape, half, hi)) return hi;
+  for (let step = 0; step < 20; step += 1) {
+    const mid = (lo + hi) / 2;
+    if (contentFits(shape, half, mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function extrudeAlongX(shape: THREE.Shape, size: number, curveSegments = 1) {
+  const half = size / 2;
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: size,
+    bevelEnabled: true,
+    bevelThickness: half * 0.05,
+    bevelSize: half * 0.045,
+    bevelSegments: 2,
+    curveSegments,
+  });
+  // Extrusion runs along +z; centre it, then turn that axis onto +x.
+  geometry.translate(0, 0, -half);
+  geometry.rotateY(Math.PI / 2);
+  return geometry;
+}
+
 function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry {
   const half = size / 2;
   if (shape === "cube") return new THREE.BoxGeometry(size, size, size);
 
   if (shape === "star") {
     const radius = half * SHAPE_RADIUS.star;
-    const geometry = new THREE.ExtrudeGeometry(
-      starOutline(5, radius, radius * 0.42),
-      { depth: size, bevelEnabled: false, curveSegments: 1 },
-    );
-    // Extrusion runs along +z; centre it, then turn that axis onto +x.
-    geometry.translate(0, 0, -half);
-    geometry.rotateY(Math.PI / 2);
-    return geometry;
+    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size);
   }
 
-  // Circle and triangle are both cylinders — one with enough segments to read
-  // as round, one with exactly three.
-  const segments = shape === "circle" ? 40 : 3;
-  const radius = half * SHAPE_RADIUS[shape];
-  // A cylinder's first vertex sits at thetaStart; put a flat side down for the
-  // triangle so it rests on its base instead of a point.
-  const thetaStart = shape === "triangle" ? Math.PI / 6 : 0;
-  const geometry = new THREE.CylinderGeometry(radius, radius, size, segments, 1, false, thetaStart);
-  // The cylinder runs along +y; turn its top cap onto +x.
-  geometry.rotateZ(-Math.PI / 2);
-  return geometry;
+  if (shape === "triangle") {
+    return extrudeAlongX(triangleOutline(half), size, 6);
+  }
+
+  // Circle as an extruded disc so caps and UVs match the star/triangle path.
+  const radius = half * SHAPE_RADIUS.circle;
+  const circle = new THREE.Shape();
+  circle.absarc(0, 0, radius, 0, Math.PI * 2, false);
+  return extrudeAlongX(circle, size, 48);
 }
 
 /* Each geometry type orders its material groups differently, and an extrusion's
@@ -1045,7 +1331,8 @@ function markedGroupIndex(geometry: THREE.BufferGeometry, half: number): number 
   const index = geometry.getIndex();
   if (!position || geometry.groups.length === 0) return 0;
   const vertexAt = (slot: number) => (index ? index.getX(slot) : slot);
-  const tolerance = half * 0.02;
+  // Wide enough to clear the bevel's inset (half * 0.05) with margin.
+  const tolerance = half * 0.09;
   let best = 0;
   let bestShare = -1;
   geometry.groups.forEach((group, groupIndex) => {
@@ -1073,32 +1360,25 @@ function shapeMaterials(geometry: THREE.BufferGeometry, half: number, marked: TH
   return Array.from({ length: slots }, (_, slot) => (slot === markedSlot ? marked : plain));
 }
 
-// How much of the outline the mark is allowed to cover, so the artwork always
-// lands inside the narrowest part of the shape.
-const MARK_SCALE: Record<ShapeId, number> = {
-  cube: 1,
-  circle: 0.74,
-  star: 0.5,
-  triangle: 0.58,
-};
-
-/* Each geometry type lays its UVs out differently — a cylinder maps its cap as
- * seen from above, and an extrusion uses world units outright, which blows the
- * texture up far past the shape. Rather than chase per-type flips, rewrite the
- * UVs on the +x cap from the vertex positions: u across -z, v up +y, scaled to
- * the mark's square. That is the same mapping the box's +x face already has, so
- * every shape carries the artwork identically. */
+// Mark maps through markHalfForShape so the lockup stays inside each outline.
+/* Each geometry type lays its UVs out differently — extrusions use world units
+ * outright, which blows the texture up far past the shape. Rewrite the UVs on
+ * the +x cap from vertex positions: u across -z, v up +y, scaled to the largest
+ * mark square that still keeps logo + MUSIC inside the silhouette. */
 function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number) {
   if (shape === "cube") return;
   const position = geometry.getAttribute("position");
   const uv = geometry.getAttribute("uv");
   if (!position || !uv) return;
-  const markHalf = half * MARK_SCALE[shape];
+  const markHalf = markHalfForShape(shape, half);
+  // Matches markedGroupIndex's tolerance, so the bevel rim gets mapped along
+  // with the flat cap instead of left with the extrusion's default UVs.
+  const tolerance = half * 0.09;
   for (let index = 0; index < position.count; index += 1) {
     const x = position.getX(index);
     // Only the cap facing the camera-right carries the mark; leave the walls
     // and the far cap with whatever they had.
-    if (Math.abs(x - half) > half * 0.02) continue;
+    if (Math.abs(x - half) > tolerance) continue;
     const z = position.getZ(index);
     const y = position.getY(index);
     uv.setXY(index, 0.5 - z / (markHalf * 2), 0.5 + y / (markHalf * 2));
@@ -1118,37 +1398,98 @@ function shapeContactPoints(shape: ShapeId, half: number): Vec3[] {
       { x: half, y: half, z: half }, { x: -half, y: half, z: half },
     ];
   }
-  const radius = half * SHAPE_RADIUS[shape];
   const points: Vec3[] = [];
   if (shape === "star") {
+    const radius = half * SHAPE_RADIUS.star;
     for (let index = 0; index < 10; index += 1) {
       const angle = Math.PI / 2 + (index * Math.PI) / 5;
-      const r = index % 2 === 0 ? radius : radius * 0.42;
+      const r = index % 2 === 0 ? radius : radius * STAR_INNER_RATIO;
       points.push({ x: half, y: Math.sin(angle) * r, z: Math.cos(angle) * r });
       points.push({ x: -half, y: Math.sin(angle) * r, z: Math.cos(angle) * r });
     }
     return points;
   }
-  const segments = shape === "circle" ? 24 : 3;
-  const thetaStart = shape === "triangle" ? Math.PI / 6 : 0;
+  if (shape === "triangle") {
+    const { top, bottom, base } = triangleDims(half);
+    const corners = [
+      { y: top, z: 0 },
+      { y: -bottom, z: base },
+      { y: -bottom, z: -base },
+    ];
+    for (const corner of corners) {
+      points.push({ x: half, y: corner.y, z: corner.z });
+      points.push({ x: -half, y: corner.y, z: corner.z });
+    }
+    return points;
+  }
+  const radius = half * SHAPE_RADIUS.circle;
+  const segments = 24;
   for (let index = 0; index < segments; index += 1) {
-    const angle = thetaStart + (index * Math.PI * 2) / segments;
+    const angle = (index * Math.PI * 2) / segments;
     points.push({ x: half, y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
     points.push({ x: -half, y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
   }
   return points;
 }
 
+// Keep non-cube silhouettes from overlapping when their outline outgrows the cube.
+function shapeFootprint(shape: ShapeId, cubeSize: number) {
+  const half = cubeSize / 2;
+  if (shape === "circle" || shape === "star") return cubeSize * SHAPE_RADIUS[shape];
+  if (shape === "triangle") return triangleDims(half).base * 2;
+  return cubeSize;
+}
+
+function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: MotionMode) {
+  const footprint = Math.max(shapeFootprint(shape, cubeSize), shapeFootprint(shapeB, cubeSize));
+  const shapePitch = footprint * 1.55;
+  if (mode === "roll") return Math.max(BASE_SPACING, cubeSize * ROLL_SPACING, shapePitch);
+  return Math.max(BASE_SPACING, shapePitch);
+}
+
+function otherShape(shape: ShapeId): ShapeId {
+  if (shape === "cube") return "circle";
+  if (shape === "circle") return "star";
+  if (shape === "star") return "triangle";
+  return "cube";
+}
+
+function flipPair(row: number, col: number, shapeA: ShapeId, shapeB: ShapeId) {
+  const alt = (((row + col) % 2) + 2) % 2 === 0;
+  return alt
+    ? { startShape: shapeA, endShape: shapeB }
+    : { startShape: shapeB, endShape: shapeA };
+}
+
 function clearThreeScene(state: ThreeSceneState) {
   state.scene.clear();
-  state.cubeGeometry?.dispose();
-  state.cubeMaterials.forEach((material) => material.dispose());
+  const disposedGeometry = new Set<THREE.BufferGeometry>();
+  Object.values(state.geometryByShape).forEach((geometry) => {
+    if (!geometry || disposedGeometry.has(geometry)) return;
+    geometry.dispose();
+    disposedGeometry.add(geometry);
+  });
+  if (state.cubeGeometry && !disposedGeometry.has(state.cubeGeometry)) {
+    state.cubeGeometry.dispose();
+  }
+  const disposedMaterial = new Set<THREE.Material>();
+  const disposeMaterial = (material: THREE.Material) => {
+    if (disposedMaterial.has(material)) return;
+    material.dispose();
+    disposedMaterial.add(material);
+  };
+  state.cubeMaterials.forEach(disposeMaterial);
+  Object.values(state.materialsByShape).forEach((materials) => {
+    materials?.forEach(disposeMaterial);
+  });
   state.brandTexture?.dispose();
   state.groundGeometry?.dispose();
   state.groundMaterial?.dispose();
   state.cubes = [];
   state.cubeGeometry = null;
   state.cubeMaterials = [];
+  state.geometryByShape = {};
+  state.materialsByShape = {};
   state.brandTexture = null;
   state.groundGeometry = null;
   state.groundMaterial = null;
@@ -1169,9 +1510,7 @@ function buildThreeScene(
   const aspect = width / height;
   const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
   const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
-  const spacing = settings.mode === "roll"
-    ? Math.max(BASE_SPACING, settings.cubeSize * ROLL_SPACING)
-    : BASE_SPACING;
+  const spacing = gridSpacing(settings.shape, settings.shapeB, settings.cubeSize, settings.mode);
   state.extent = Math.max(columns, rows) * BASE_SPACING * FRAMING;
 
   const brandTexture = createBrandTexture(settings, logo);
@@ -1189,9 +1528,26 @@ function buildThreeScene(
     roughness: 0.92,
     metalness: 0,
   });
-  const cubeGeometry = buildShapeGeometry(settings.shape, settings.cubeSize);
-  applyCapUVs(cubeGeometry, settings.shape, settings.cubeSize / 2);
-  const cubeMaterials = shapeMaterials(cubeGeometry, settings.cubeSize / 2, markedMaterial, faceMaterial);
+
+  const shapesNeeded: ShapeId[] = settings.mode === "flip"
+    ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
+    : [settings.shape];
+  const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
+  const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
+  const half = settings.cubeSize / 2;
+  for (const shape of shapesNeeded) {
+    const geometry = buildShapeGeometry(shape, settings.cubeSize);
+    applyCapUVs(geometry, shape, half);
+    geometryByShape[shape] = geometry;
+    materialsByShape[shape] = shapeMaterials(geometry, half, markedMaterial, faceMaterial);
+  }
+  const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize);
+  const cubeMaterials = materialsByShape[settings.shape] ?? [markedMaterial, faceMaterial];
+  const contactByShape: Partial<Record<ShapeId, Vec3[]>> = {};
+  for (const shape of shapesNeeded) {
+    contactByShape[shape] = shapeContactPoints(shape, half);
+  }
+
   const stride = columns + 3;
   const margin = settings.mode === "roll"
     ? Math.ceil((settings.rollTurns * settings.cubeSize) / spacing) + 1
@@ -1202,12 +1558,28 @@ function buildThreeScene(
       const staggerX = row % 2 === 0 ? 0 : spacing * 0.5;
       const x = (col - (columns - 1) / 2) * spacing + staggerX;
       const z = (row - (rows - 1) / 2) * spacing;
-      const mesh = new THREE.Mesh(cubeGeometry, cubeMaterials);
+      const pair = settings.mode === "flip"
+        ? flipPair(row, col, settings.shape, settings.shapeB)
+        : { startShape: settings.shape, endShape: settings.shape };
+      const startGeometry = geometryByShape[pair.startShape] ?? cubeGeometry;
+      const startMaterials = materialsByShape[pair.startShape] ?? cubeMaterials;
+      const mesh = new THREE.Mesh(startGeometry, startMaterials);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.matrixAutoUpdate = true;
       state.scene.add(mesh);
-      state.cubes.push({ index, row, col, x, z, mesh });
+      state.cubes.push({
+        index,
+        row,
+        col,
+        x,
+        z,
+        startShape: pair.startShape,
+        endShape: pair.endShape,
+        contactStart: contactByShape[pair.startShape] ?? shapeContactPoints(pair.startShape, half),
+        contactEnd: contactByShape[pair.endShape] ?? shapeContactPoints(pair.endShape, half),
+        mesh,
+      });
     }
   }
 
@@ -1246,7 +1618,9 @@ function buildThreeScene(
   state.scene.add(hemisphereLight, ambientLight, keyLight, keyLight.target);
 
   state.cubeGeometry = cubeGeometry;
-  state.cubeMaterials = cubeMaterials;
+  state.cubeMaterials = [faceMaterial, markedMaterial];
+  state.geometryByShape = geometryByShape;
+  state.materialsByShape = materialsByShape;
   state.brandTexture = brandTexture;
   state.groundGeometry = groundGeometry;
   state.groundMaterial = groundMaterial;
@@ -1283,6 +1657,8 @@ function drawScene(
       cubes: [],
       cubeGeometry: null,
       cubeMaterials: [],
+      geometryByShape: {},
+      materialsByShape: {},
       brandTexture: null,
       groundGeometry: null,
       groundMaterial: null,
@@ -1304,6 +1680,7 @@ function drawScene(
     settings.density,
     settings.cubeSize,
     settings.shape,
+    settings.shapeB,
     settings.mode,
     settings.rollTurns,
     settings.background,
@@ -1323,7 +1700,7 @@ function drawScene(
   const aspect = width / height;
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
   const rollActiveDuration = Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD);
-  const rollZoomProgress = settings.mode === "roll"
+  const rollZoomProgress = settings.mode === "roll" || settings.mode === "spin" || settings.mode === "pop" || settings.mode === "flip"
     ? clamp(time / rollActiveDuration, 0, 1)
     : 0;
   // Smoothly push in during the roll and hold the final framing. Orthographic
@@ -1342,8 +1719,6 @@ function drawScene(
   state.camera.lookAt(0, settings.cubeSize * 0.18, 0);
   state.camera.updateProjectionMatrix();
 
-  const half = settings.cubeSize / 2;
-  const localVertices = shapeContactPoints(settings.shape, half);
   const cubeFrames = state.cubes.map((cube) => {
     const movement = getMotion(
       cube.index,
@@ -1360,6 +1735,14 @@ function drawScene(
       settings.cubeSize,
       settings.rollTurns,
     );
+    const shownShape = movement.revealed ? cube.endShape : cube.startShape;
+    const localVertices = movement.revealed ? cube.contactEnd : cube.contactStart;
+    const geometry = state.geometryByShape[shownShape];
+    const materials = state.materialsByShape[shownShape];
+    if (geometry && cube.mesh.geometry !== geometry) {
+      cube.mesh.geometry = geometry;
+      if (materials) cube.mesh.material = materials;
+    }
     const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
     const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
     const contactHeight = -minimumLocalY + movement.lift * settings.cubeSize;
@@ -1376,19 +1759,23 @@ function drawScene(
   // Rows of the same parity share a physical rolling lane. At staggered phases
   // a rear cube can otherwise catch a front cube. Resolve that like a simple
   // 3D collision constraint instead of allowing the meshes to interpenetrate.
-  const lanes = new Map<string, typeof cubeFrames>();
-  for (const frame of cubeFrames) {
-    const laneKey = `${((frame.cube.row % 2) + 2) % 2}:${frame.cube.col}`;
-    const lane = lanes.get(laneKey) ?? [];
-    lane.push(frame);
-    lanes.set(laneKey, lane);
-  }
-  for (const lane of lanes.values()) {
-    lane.sort((a, b) => b.cube.z - a.cube.z);
-    let nextMaximumZ = Number.POSITIVE_INFINITY;
-    for (const frame of lane) {
-      frame.centerZ = Math.min(frame.centerZ, nextMaximumZ - frame.maximumLocalZ);
-      nextMaximumZ = frame.centerZ + frame.minimumLocalZ - settings.cubeSize * 0.04;
+  // Only Roll translates along z; Spin/Pop would jitter if rotating footprints
+  // were lane-resolved the same way.
+  if (settings.mode === "roll") {
+    const lanes = new Map<string, typeof cubeFrames>();
+    for (const frame of cubeFrames) {
+      const laneKey = `${((frame.cube.row % 2) + 2) % 2}:${frame.cube.col}`;
+      const lane = lanes.get(laneKey) ?? [];
+      lane.push(frame);
+      lanes.set(laneKey, lane);
+    }
+    for (const lane of lanes.values()) {
+      lane.sort((a, b) => b.cube.z - a.cube.z);
+      let nextMaximumZ = Number.POSITIVE_INFINITY;
+      for (const frame of lane) {
+        frame.centerZ = Math.min(frame.centerZ, nextMaximumZ - frame.maximumLocalZ);
+        nextMaximumZ = frame.centerZ + frame.minimumLocalZ - settings.cubeSize * 0.04;
+      }
     }
   }
 
@@ -1396,6 +1783,7 @@ function drawScene(
     const { cube, movement } = frame;
     cube.mesh.position.set(cube.x + movement.offsetX, frame.contactHeight, frame.centerZ);
     cube.mesh.rotation.set(movement.rx, movement.ry, movement.rz, "XYZ");
+    cube.mesh.scale.setScalar(movement.scale);
   }
 
   const shadowStrength = clamp(settings.shadow / 100, 0, 1);
@@ -1487,6 +1875,7 @@ export default function WtvCubeStudio() {
     logoText: "WTV",
     subline: "MUSIC",
     shape: "cube",
+    shapeB: "circle",
     mode: "roll",
   });
 
@@ -1506,6 +1895,22 @@ export default function WtvCubeStudio() {
       }
       if (key === "sequenceDuration") {
         baseSequenceDurationRef.current = (value as number) * current.speed;
+      }
+      if (key === "shape") {
+        const nextShape = value as ShapeId;
+        // Roll is a square-edge tip; non-cubes default onto Spin so the mark
+        // stays put while the silhouette turns.
+        const nextMode = nextShape !== "cube" && current.mode === "roll" ? "spin" : current.mode;
+        const nextShapeB = current.shapeB === nextShape ? otherShape(nextShape) : current.shapeB;
+        return { ...current, shape: nextShape, shapeB: nextShapeB, mode: nextMode };
+      }
+      if (key === "shapeB") {
+        const nextShapeB = value as ShapeId;
+        const nextShape = current.shape === nextShapeB ? otherShape(nextShapeB) : current.shape;
+        return { ...current, shape: nextShape, shapeB: nextShapeB };
+      }
+      if (key === "mode" && value === "flip" && current.shape === current.shapeB) {
+        return { ...current, mode: "flip", shapeB: otherShape(current.shape) };
       }
       return { ...current, [key]: value };
     });
@@ -1823,7 +2228,7 @@ export default function WtvCubeStudio() {
             />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
             <div className="camera-hint">Drag to orbit · scroll to zoom</div>
-            <div className="stage-overlay stage-overlay-bottom"><span>Seed {seed.toString().padStart(4, "0")}</span><span>{settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{settings.mode === "settle" ? "Drop" : "Roll"} · {settings.speed.toFixed(2)}×</span></div>
+            <div className="stage-overlay stage-overlay-bottom"><span>Seed {seed.toString().padStart(4, "0")}</span><span>{settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{MOTION_LABELS[settings.mode]} · {settings.speed.toFixed(2)}×</span></div>
           </div>
 
           <div className="transport">
@@ -1850,11 +2255,12 @@ export default function WtvCubeStudio() {
             <ColorControl label="Logo / ink" value={settings.ink} onChange={(value) => updateSetting("ink", value)} />
           </PanelSection>
 
-          <PanelSection title="Shape" value={SHAPE_LABELS[settings.shape]}>
+          <PanelSection title="Shape" value={`${SHAPE_LABELS[settings.shape]} / ${SHAPE_LABELS[settings.shapeB]}`}>
+            <p className="camera-help" style={{ marginTop: 0 }}>Shape A</p>
             <div className="segmented four">
               {(Object.keys(SHAPE_LABELS) as ShapeId[]).map((shape) => (
                 <button
-                  key={shape}
+                  key={`a-${shape}`}
                   type="button"
                   className={settings.shape === shape ? "active" : ""}
                   onClick={() => updateSetting("shape", shape)}
@@ -1863,7 +2269,20 @@ export default function WtvCubeStudio() {
                 </button>
               ))}
             </div>
-            <p className="camera-help">The mark stays on the face angled to the right of screen, whatever the outline.</p>
+            <p className="camera-help" style={{ marginTop: 0 }}>Shape B · Flip pair</p>
+            <div className="segmented four">
+              {(Object.keys(SHAPE_LABELS) as ShapeId[]).map((shape) => (
+                <button
+                  key={`b-${shape}`}
+                  type="button"
+                  className={settings.shapeB === shape ? "active" : ""}
+                  onClick={() => updateSetting("shapeB", shape)}
+                >
+                  {SHAPE_LABELS[shape]}
+                </button>
+              ))}
+            </div>
+            <p className="camera-help">Flip waves A↔B on a checkerboard. Logo stays inside every outline.</p>
           </PanelSection>
 
           <PanelSection title="Grid" value={`${settings.density} \u00d7 ${settings.cubeSize}px`}>
@@ -1871,16 +2290,36 @@ export default function WtvCubeStudio() {
             <RangeControl label="Size" value={settings.cubeSize} min={48} max={112} suffix=" px" onChange={(value) => updateSetting("cubeSize", value)} />
           </PanelSection>
 
-          <PanelSection title="Motion" value={settings.mode === "settle" ? "Drop" : "Roll"}>
-            <div className="segmented two">
-              {(["settle", "roll"] as MotionMode[]).map((mode) => <button key={mode} type="button" className={settings.mode === mode ? "active" : ""} onClick={() => updateSetting("mode", mode)}>{mode === "settle" ? "Drop" : "Roll"}</button>)}
+          <PanelSection title="Motion" value={MOTION_LABELS[settings.mode]}>
+            <div className="segmented five">
+              {(["settle", "roll", "spin", "pop", "flip"] as MotionMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={settings.mode === mode ? "active" : ""}
+                  onClick={() => updateSetting("mode", mode)}
+                >
+                  {MOTION_LABELS[mode]}
+                </button>
+              ))}
             </div>
+            <p className="camera-help">Flip = card turn, A/B swap at the edge. Drop / Roll / Spin / Pop as before.</p>
             <RangeControl label="Sequence time" value={settings.sequenceDuration} min={MIN_SEQUENCE_DURATION} max={MAX_SEQUENCE_DURATION} step={0.5} suffix=" s" onChange={(value) => updateSetting("sequenceDuration", value)} />
             <RangeControl label="Gravity" value={settings.gravity} min={45} max={170} suffix="%" onChange={(value) => updateSetting("gravity", value)} />
             <RangeControl label="Bounce" value={settings.bounce} min={0} max={100} suffix="%" onChange={(value) => updateSetting("bounce", value)} />
             <RangeControl label="Tumble" value={settings.motion} min={0} max={100} suffix="%" onChange={(value) => updateSetting("motion", value)} />
             <RangeControl label="Fall speed" value={settings.speed} min={0.35} max={1.8} step={0.05} suffix="x" onChange={(value) => updateSetting("speed", value)} />
-            {settings.mode === "roll" && <RangeControl label="Roll turns" value={settings.rollTurns} min={1} max={4} step={1} suffix=" × 90°" onChange={(value) => updateSetting("rollTurns", value)} />}
+            {(settings.mode === "roll" || settings.mode === "spin") && (
+              <RangeControl
+                label={settings.mode === "spin" ? "Spin turns" : "Roll turns"}
+                value={settings.rollTurns}
+                min={1}
+                max={4}
+                step={1}
+                suffix={settings.mode === "spin" ? " × 360°" : " × 90°"}
+                onChange={(value) => updateSetting("rollTurns", value)}
+              />
+            )}
             <RangeControl label="Face align" value={settings.alignSpeed} min={0.75} max={4} step={0.05} suffix="x" onChange={(value) => updateSetting("alignSpeed", value)} />
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
           </PanelSection>
