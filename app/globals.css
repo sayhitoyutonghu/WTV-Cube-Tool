@@ -168,6 +168,20 @@ button { color: inherit; }
   border-top: 1px solid var(--hairline);
 }
 
+/* Keep the desktop playhead reachable while the settings panel scrolls. The
+   preview grid still reserves its original 66px transport row, so pinning the
+   controls does not resize or shift the canvas. */
+@media (min-width: 961px) {
+  .transport {
+    position: fixed;
+    z-index: 20;
+    left: 0;
+    right: 372px;
+    bottom: 0;
+    height: 66px;
+  }
+}
+
 .play-button, .transport-button {
   border: 1px solid transparent;
   border-radius: 10px;

@@ -66,7 +66,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.doesNotMatch(component, /const spacing = settings\.cubeSize/, "grid spacing must not cancel the cube-size control");
   assert.match(component, /const BASE_SPACING = 76 \* 1\.72/);
   assert.match(component, /const sublineText = subline\.slice\(0, 12\)/, "the editable type line should render below uploaded artwork");
-  assert.match(component, /subline: "MUSIC",\s+mode: "roll",/, "roll should be the default motion mode");
+  assert.match(component, /subline: "MUSIC",[\s\S]*?mode: "roll",/, "roll should be the default motion mode");
   assert.match(component, /const REFERENCE_CAMERA_ZOOM = 94/, "the default camera should use the reference pull-back");
   assert.match(component, /const REFERENCE_CAMERA_YAW = 45/, "the reference camera should keep its isometric orbit");
   assert.match(component, /const REFERENCE_CAMERA_PITCH = 35/, "the reference camera should keep its isometric elevation");
@@ -100,15 +100,34 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /offsetZ: \(advance - turnCount\) \* cubeSize/, "rolling cubes should translate one width per selected quarter turn");
   assert.match(component, /const DEFAULT_ROLL_TURNS = 1/, "the reference default should make one decisive quarter-turn");
   assert.match(component, /rx: \(turns - turnCount\) \* \(Math\.PI \/ 2\)/, "the cube should start on its selected previous face and land upright");
-  assert.match(component, /label="Roll turns" value=\{settings\.rollTurns\}/, "roll turns should be user-adjustable from one to four quarter-turns");
+  assert.match(component, /label=\{settings\.mode === "spin" \? "Spin turns" : "Roll turns"\}/, "roll turns should remain user-adjustable alongside spin turns");
   assert.match(component, /function stickyRollEase/, "rolling cubes should use the reference-style viscous release and landing curve");
   assert.match(component, /const ROLL_TIP_FRACTION = 0\.55/, "the sticky quarter-turn should spend longer in contact transition");
   assert.match(component, /const ROLL_FINAL_HOLD = 1;/, "roll mode should reserve only a one-second final hold");
   assert.match(component, /sequenceDuration - ROLL_FINAL_HOLD/, "the staggered roll should finish before the fixed final hold");
   assert.match(component, /const ROLL_ZOOM_IN = 1\.07/, "the camera should reproduce the reference's subtle roll zoom-in");
-  assert.match(component, /const rollZoomProgress = settings\.mode === "roll"/, "only roll mode should animate the camera scale");
-  assert.match(component, /aspect > 1\.2 \? 1\.18/, "the widescreen field should match the reference cube count");
+  assert.match(component, /const rollZoomProgress = settings\.mode === "roll" \|\| settings\.mode === "spin" \|\| settings\.mode === "pop"/, "ground-based motions should share the subtle camera move while flip stays locked");
   assert.match(component, /const lanes = new Map/, "the 3D renderer should prevent rolling cubes from interpenetrating in shared lanes");
+  assert.match(component, /type MotionMode = "settle" \| "roll" \| "spin" \| "pop" \| "flip"/, "flip should remain a first-class motion mode alongside the new motions");
+  assert.match(component, /cameraVector\(90, 0\)/, "flip should lock the camera to a square front elevation");
+  assert.match(component, /settings\.mode === "flip" \? 0 : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall");
+  assert.match(component, /const sequenceProgress = clamp\(time \/ activeDuration, 0, 1\)/, "flip should run one reveal wave across the sequence");
+  assert.match(component, /ry: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn from their plain back to their marked front");
+  assert.match(component, /const FLIP_GRID_SPACING = 80/, "flip should keep a fixed tight lattice so the size control can enlarge its circles");
+  assert.match(component, /circle: 1\.25,/, "the default flip circle should use the enlarged outline from the latest shape work");
+  assert.match(component, /const FLIP_CAMERA_SCALE = 1\.12/, "the flip camera should push closer than the measured base framing");
+  assert.match(component, /const FLIP_FINAL_HOLD = 1;/, "flip should reserve a full second for its aligned final tableau");
+  assert.match(component, /ry: finalFaceAligned \? 0/, "every object should lock to an exact front-facing rotation during the final hold");
+  assert.match(component, /const FLIP_SHORT_AXIS_COUNT = 14/, "the default flip framing should match the reference's dense fourteen-object short edge");
+  assert.match(component, /width \/ \(\(state\.gridColumns \+ 0\.25\) \* state\.gridSpacing\)/, "flip framing should preserve the reference object scale across aspect ratios");
+  assert.match(component, /return \{ \.\.\.current, mode: "flip", shape: "circle", shapeB: "circle" \}/, "selecting flip should default its shape to circle");
+  assert.match(component, /Front camera locked/, "the interface should explain that flip uses a locked front camera");
+  assert.match(component, /function isolateExtrudedFrontCap/, "extruded shapes should keep their rear cap plain during a flip");
+  assert.match(component, /const materialIndex = isFrontCap \? 0 : 1/, "only the camera-facing cap should receive the logo material");
+
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(styles, /@media \(min-width: 961px\)[\s\S]*?\.transport[\s\S]*?position: fixed/, "the desktop transport should stay pinned to the viewport");
+  assert.match(styles, /\.preview-column[\s\S]*?grid-template-rows: minmax\(0, 1fr\) 66px/, "the preview should retain the transport row so the canvas does not move");
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));

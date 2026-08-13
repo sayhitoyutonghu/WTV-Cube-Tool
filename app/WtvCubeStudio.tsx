@@ -91,6 +91,13 @@ const ROLL_SCATTER = 0.75;
 // beside a reference frame. The travel needn't divide into the pitch — the
 // field just ends on a lattice offset from where it started.
 const ROLL_SPACING = 2.4;
+// Dense front-facing button wall measured from the supplied 720 × 1280 clip.
+const FLIP_SHORT_AXIS_COUNT = 14;
+const FLIP_GRID_SPACING = 80;
+const FLIP_FINAL_HOLD = 1;
+const FLIP_WAVE_SPAN = 0.78;
+const FLIP_TURN_FRACTION = 0.18;
+const FLIP_CAMERA_SCALE = 1.12;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
 const BASE_SPACING = 76 * 1.72;
@@ -201,6 +208,11 @@ function stickyRollEase(value: number) {
   }
   const settle = (value - landingAt) / (1 - landingAt);
   return 0.92 + 0.08 * settle * settle * (3 - 2 * settle);
+}
+
+function flipEase(value: number) {
+  const t = clamp(value, 0, 1);
+  return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 function hexToRgb(hex: string) {
@@ -667,22 +679,25 @@ function getMotion(
     return { rx: 0, ry: 0, rz: 0, lift, offsetX: 0, offsetZ: 0, scale: Math.max(0.001, scale), revealed: false };
   }
 
-  // Card flip: turn to edge-on, swap silhouette, open onto the other shape.
-  // Checkerboard cells start on opposite members of the A/B pair so both
-  // outlines trade places as the wave crosses — the Hasselrot-style reveal.
+  // One reveal wave: every plain rear cap turns once onto its marked front.
   if (mode === "flip") {
-    const stagger = waveStagger(col, row, random);
-    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, 1.05);
-    const tip = clamp(local / cycle, 0, 1);
-    const eased = tip * tip * (3 - 2 * tip);
-    const revealed = eased >= 0.5;
-    // +90° then −90°→0 keeps the mark on +x at rest; the jump at the midpoint
-    // is hidden while the cell is edge-on.
-    const ry = revealed
-      ? -((1 - eased) / 0.5) * (Math.PI / 2)
-      : (eased / 0.5) * (Math.PI / 2);
-    const lift = Math.sin(eased * Math.PI) * 0.42;
-    return { rx: 0, ry, rz: 0, lift, offsetX: 0, offsetZ: 0, scale: 1, revealed };
+    const stagger = (((row * 0.055 + col * 0.018 + random * 0.08) % 1) + 1) % 1;
+    const activeDuration = Math.max(0.5, sequenceDuration - FLIP_FINAL_HOLD);
+    const finalFaceAligned = time >= activeDuration;
+    const sequenceProgress = clamp(time / activeDuration, 0, 1);
+    const waveSpan = clamp(FLIP_WAVE_SPAN * (2.4 / alignSpeedScale), 0.48, 0.84);
+    const local = sequenceProgress - stagger * waveSpan;
+    const turnProgress = clamp(local / FLIP_TURN_FRACTION, 0, 1);
+    return {
+      rx: 0,
+      ry: finalFaceAligned ? 0 : Math.PI - flipEase(turnProgress) * Math.PI,
+      rz: 0,
+      lift: 0,
+      offsetX: 0,
+      offsetZ: 0,
+      scale: 1,
+      revealed: turnProgress >= 0.5,
+    };
   }
 
   // The loop begins with every cube suspended above its final grid position.
@@ -1012,6 +1027,7 @@ type ThreeCube = {
   row: number;
   col: number;
   x: number;
+  y: number;
   z: number;
   startShape: ShapeId;
   endShape: ShapeId;
@@ -1037,6 +1053,9 @@ type ThreeSceneState = {
   hemisphereLight: THREE.HemisphereLight | null;
   structureKey: string;
   extent: number;
+  gridColumns: number;
+  gridRows: number;
+  gridSpacing: number;
 };
 
 const threeScenes = new WeakMap<HTMLCanvasElement, ThreeSceneState>();
@@ -1360,6 +1379,33 @@ function shapeMaterials(geometry: THREE.BufferGeometry, half: number, marked: TH
   return Array.from({ length: slots }, (_, slot) => (slot === markedSlot ? marked : plain));
 }
 
+function isolateExtrudedFrontCap(geometry: THREE.BufferGeometry) {
+  const position = geometry.getAttribute("position");
+  const index = geometry.getIndex();
+  if (!position) return;
+  const vertexAt = (slot: number) => (index ? index.getX(slot) : slot);
+  const slotCount = index ? index.count : position.count;
+  let frontX = Number.NEGATIVE_INFINITY;
+  for (let vertex = 0; vertex < position.count; vertex += 1) frontX = Math.max(frontX, position.getX(vertex));
+  const tolerance = Math.max(0.001, Math.abs(frontX) * 0.0001);
+  geometry.clearGroups();
+  let runStart = 0;
+  let runMaterial = -1;
+  for (let slot = 0; slot < slotCount; slot += 3) {
+    const isFrontCap = [slot, slot + 1, slot + 2].every(
+      (triangleSlot) => Math.abs(position.getX(vertexAt(triangleSlot)) - frontX) <= tolerance,
+    );
+    const materialIndex = isFrontCap ? 0 : 1;
+    if (runMaterial === -1) runMaterial = materialIndex;
+    if (materialIndex !== runMaterial) {
+      geometry.addGroup(runStart, slot - runStart, runMaterial);
+      runStart = slot;
+      runMaterial = materialIndex;
+    }
+  }
+  geometry.addGroup(runStart, slotCount - runStart, runMaterial);
+}
+
 // Mark maps through markHalfForShape so the lockup stays inside each outline.
 /* Each geometry type lays its UVs out differently — extrusions use world units
  * outright, which blows the texture up far past the shape. Rewrite the UVs on
@@ -1444,6 +1490,7 @@ function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: Mo
   const footprint = Math.max(shapeFootprint(shape, cubeSize), shapeFootprint(shapeB, cubeSize));
   const shapePitch = footprint * 1.55;
   if (mode === "roll") return Math.max(BASE_SPACING, cubeSize * ROLL_SPACING, shapePitch);
+  if (mode === "flip") return FLIP_GRID_SPACING;
   return Math.max(BASE_SPACING, shapePitch);
 }
 
@@ -1508,10 +1555,18 @@ function buildThreeScene(
   const width = canvas.width;
   const height = canvas.height;
   const aspect = width / height;
-  const columns = Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
-  const rows = Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
+  const flipShortAxisCount = Math.max(8, Math.round((settings.density / 7) * FLIP_SHORT_AXIS_COUNT));
+  const columns = settings.mode === "flip"
+    ? Math.max(6, Math.round(flipShortAxisCount * Math.max(1, aspect)))
+    : Math.max(3, Math.round(settings.density * (aspect > 1.2 ? 1.35 : aspect < 0.8 ? 0.68 : 1)));
+  const rows = settings.mode === "flip"
+    ? Math.max(6, Math.round(flipShortAxisCount * Math.max(1, 1 / aspect)))
+    : Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
   const spacing = gridSpacing(settings.shape, settings.shapeB, settings.cubeSize, settings.mode);
   state.extent = Math.max(columns, rows) * BASE_SPACING * FRAMING;
+  state.gridColumns = columns;
+  state.gridRows = rows;
+  state.gridSpacing = spacing;
 
   const brandTexture = createBrandTexture(settings, logo);
   const faceMaterial = new THREE.MeshStandardMaterial({
@@ -1529,17 +1584,18 @@ function buildThreeScene(
     metalness: 0,
   });
 
-  const shapesNeeded: ShapeId[] = settings.mode === "flip"
-    ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
-    : [settings.shape];
+  const shapesNeeded: ShapeId[] = [settings.shape];
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
   const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
   const half = settings.cubeSize / 2;
   for (const shape of shapesNeeded) {
     const geometry = buildShapeGeometry(shape, settings.cubeSize);
     applyCapUVs(geometry, shape, half);
+    if (shape !== "cube") isolateExtrudedFrontCap(geometry);
     geometryByShape[shape] = geometry;
-    materialsByShape[shape] = shapeMaterials(geometry, half, markedMaterial, faceMaterial);
+    materialsByShape[shape] = shape === "cube"
+      ? shapeMaterials(geometry, half, markedMaterial, faceMaterial)
+      : [markedMaterial, faceMaterial];
   }
   const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize);
   const cubeMaterials = materialsByShape[settings.shape] ?? [markedMaterial, faceMaterial];
@@ -1555,12 +1611,13 @@ function buildThreeScene(
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
       const index = (row + margin + 1) * stride + col + 2;
-      const staggerX = row % 2 === 0 ? 0 : spacing * 0.5;
-      const x = (col - (columns - 1) / 2) * spacing + staggerX;
-      const z = (row - (rows - 1) / 2) * spacing;
-      const pair = settings.mode === "flip"
-        ? flipPair(row, col, settings.shape, settings.shapeB)
-        : { startShape: settings.shape, endShape: settings.shape };
+      const staggerX = settings.mode === "flip" ? 0 : row % 2 === 0 ? 0 : spacing * 0.5;
+      const x = settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
+      const y = settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
+      const z = settings.mode === "flip"
+        ? (col - (columns - 1) / 2) * spacing
+        : (row - (rows - 1) / 2) * spacing;
+      const pair = { startShape: settings.shape, endShape: settings.shape };
       const startGeometry = geometryByShape[pair.startShape] ?? cubeGeometry;
       const startMaterials = materialsByShape[pair.startShape] ?? cubeMaterials;
       const mesh = new THREE.Mesh(startGeometry, startMaterials);
@@ -1573,6 +1630,7 @@ function buildThreeScene(
         row,
         col,
         x,
+        y,
         z,
         startShape: pair.startShape,
         endShape: pair.endShape,
@@ -1591,8 +1649,13 @@ function buildThreeScene(
     metalness: 0,
   });
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.08;
+  if (settings.mode === "flip") {
+    ground.rotation.y = Math.PI / 2;
+    ground.position.x = -settings.cubeSize * 0.7;
+  } else {
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.08;
+  }
   ground.receiveShadow = true;
   state.scene.add(ground);
 
@@ -1601,7 +1664,8 @@ function buildThreeScene(
   const hemisphereLight = new THREE.HemisphereLight("#fff9df", shade(settings.background, -0.025), 1.9);
   const ambientLight = new THREE.AmbientLight("#fff5cf", 0.72);
   const keyLight = new THREE.DirectionalLight("#fff4c2", 1.45);
-  keyLight.position.set(900, 1800, -650);
+  if (settings.mode === "flip") keyLight.position.set(1800, 900, 700);
+  else keyLight.position.set(900, 1800, -650);
   keyLight.castShadow = true;
   keyLight.shadow.mapSize.set(1024, 1024);
   keyLight.shadow.bias = -0.00035;
@@ -1667,6 +1731,9 @@ function drawScene(
       hemisphereLight: null,
       structureKey: "",
       extent: 1,
+      gridColumns: 1,
+      gridRows: 1,
+      gridSpacing: BASE_SPACING,
     };
     threeScenes.set(canvas, state);
   }
@@ -1700,23 +1767,29 @@ function drawScene(
   const aspect = width / height;
   const extentFactor = aspect > 1.2 ? 0.72 : aspect < 0.8 ? 0.58 : 0.78;
   const rollActiveDuration = Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD);
-  const rollZoomProgress = settings.mode === "roll" || settings.mode === "spin" || settings.mode === "pop" || settings.mode === "flip"
+  const rollZoomProgress = settings.mode === "roll" || settings.mode === "spin" || settings.mode === "pop"
     ? clamp(time / rollActiveDuration, 0, 1)
     : 0;
   // Smoothly push in during the roll and hold the final framing. Orthographic
   // projection makes this a true scale move with no unwanted perspective shift.
   const rollZoom = 1 + (ROLL_ZOOM_IN - 1) * (rollZoomProgress * rollZoomProgress * (3 - 2 * rollZoomProgress));
-  const scale = Math.min(width, height) / Math.max(420, state.extent * extentFactor) * (settings.cameraZoom / 100) * rollZoom;
+  const flipScale = Math.min(
+    width / ((state.gridColumns + 0.25) * state.gridSpacing),
+    height / ((state.gridRows + 0.25) * state.gridSpacing),
+  ) * (settings.cameraZoom / REFERENCE_CAMERA_ZOOM) * FLIP_CAMERA_SCALE;
+  const scale = settings.mode === "flip"
+    ? flipScale
+    : Math.min(width, height) / Math.max(420, state.extent * extentFactor) * (settings.cameraZoom / 100) * rollZoom;
   state.camera.left = -width / (2 * scale);
   state.camera.right = width / (2 * scale);
   state.camera.top = height / (2 * scale);
   state.camera.bottom = -height / (2 * scale);
   state.camera.near = 1;
   state.camera.far = 10000;
-  const view = cameraVector(settings.cameraYaw, settings.cameraPitch);
+  const view = settings.mode === "flip" ? cameraVector(90, 0) : cameraVector(settings.cameraYaw, settings.cameraPitch);
   state.camera.position.set(view.x * 4200, view.y * 4200, view.z * 4200);
   state.camera.up.set(0, 1, 0);
-  state.camera.lookAt(0, settings.cubeSize * 0.18, 0);
+  state.camera.lookAt(0, settings.mode === "flip" ? 0 : settings.cubeSize * 0.18, 0);
   state.camera.updateProjectionMatrix();
 
   const cubeFrames = state.cubes.map((cube) => {
@@ -1745,7 +1818,7 @@ function drawScene(
     }
     const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
     const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
-    const contactHeight = -minimumLocalY + movement.lift * settings.cubeSize;
+    const contactHeight = settings.mode === "flip" ? cube.y : -minimumLocalY + movement.lift * settings.cubeSize;
     return {
       cube,
       movement,
@@ -1909,8 +1982,8 @@ export default function WtvCubeStudio() {
         const nextShape = current.shape === nextShapeB ? otherShape(nextShapeB) : current.shape;
         return { ...current, shape: nextShape, shapeB: nextShapeB };
       }
-      if (key === "mode" && value === "flip" && current.shape === current.shapeB) {
-        return { ...current, mode: "flip", shapeB: otherShape(current.shape) };
+      if (key === "mode" && value === "flip") {
+        return { ...current, mode: "flip", shape: "circle", shapeB: "circle" };
       }
       return { ...current, [key]: value };
     });
@@ -2227,8 +2300,8 @@ export default function WtvCubeStudio() {
               onKeyDown={controlCameraWithKeyboard}
             />
             <div className="stage-overlay stage-overlay-top"><span>{notice}</span><span>{aspect} / {canvasWidth} x {canvasHeight}</span></div>
-            <div className="camera-hint">Drag to orbit · scroll to zoom</div>
-            <div className="stage-overlay stage-overlay-bottom"><span>Seed {seed.toString().padStart(4, "0")}</span><span>{settings.cameraYaw}° / {settings.cameraPitch}° / {settings.cameraZoom}%</span><span>{MOTION_LABELS[settings.mode]} · {settings.speed.toFixed(2)}×</span></div>
+            <div className="camera-hint">{settings.mode === "flip" ? "Front camera locked · scroll to zoom" : "Drag to orbit · scroll to zoom"}</div>
+            <div className="stage-overlay stage-overlay-bottom"><span>Seed {seed.toString().padStart(4, "0")}</span><span>{settings.mode === "flip" ? `Front / ${settings.cameraZoom}%` : `${settings.cameraYaw}° / ${settings.cameraPitch}° / ${settings.cameraZoom}%`}</span><span>{MOTION_LABELS[settings.mode]} · {settings.speed.toFixed(2)}×</span></div>
           </div>
 
           <div className="transport">
@@ -2324,11 +2397,11 @@ export default function WtvCubeStudio() {
             <RangeControl label="Soft shadow" value={settings.shadow} min={0} max={100} suffix="%" onChange={(value) => updateSetting("shadow", value)} />
           </PanelSection>
 
-          <PanelSection title="Camera" value={`${settings.cameraYaw}\u00b0 / ${settings.cameraPitch}\u00b0`}>
-            <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="\u00b0" onChange={(value) => updateSetting("cameraYaw", value)} />
-            <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="\u00b0" onChange={(value) => updateSetting("cameraPitch", value)} />
+          <PanelSection title="Camera" value={settings.mode === "flip" ? "Front" : `${settings.cameraYaw}\u00b0 / ${settings.cameraPitch}\u00b0`}>
+            {settings.mode !== "flip" && <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="\u00b0" onChange={(value) => updateSetting("cameraYaw", value)} />}
+            {settings.mode !== "flip" && <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="\u00b0" onChange={(value) => updateSetting("cameraPitch", value)} />}
             <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
-            <p className="camera-help">Drag on the preview to orbit. Scroll to zoom.</p>
+            <p className="camera-help">{settings.mode === "flip" ? "Flip uses a locked front elevation. Scroll to zoom." : "Drag on the preview to orbit. Scroll to zoom."}</p>
           </PanelSection>
 
           <PanelSection title="Brand" value={settings.logoText}>
