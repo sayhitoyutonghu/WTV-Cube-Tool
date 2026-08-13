@@ -94,6 +94,10 @@ const ROLL_SPACING = 2.4;
 // Dense front-facing button wall measured from the supplied 720 × 1280 clip.
 const FLIP_SHORT_AXIS_COUNT = 14;
 const FLIP_GRID_SPACING = 80;
+// Keep the front wall tight, but give each outline enough room for its true
+// silhouette. Star and triangle are intentionally larger than the cube so the
+// logo can stay at the same scale; their pitch must grow with that footprint.
+const FLIP_SHAPE_GAP = 1.12;
 const FLIP_FINAL_HOLD = 1;
 const FLIP_WAVE_SPAN = 0.78;
 const FLIP_TURN_FRACTION = 0.18;
@@ -1120,27 +1124,21 @@ const SHAPE_LABELS: Record<ShapeId, string> = {
   triangle: "Triangle",
 };
 
-// Outline radius as a fraction of half the cube size. Grown so a near-cube mark
-// clears the silhouette; applyCapUVs still shrinks per-shape if needed.
+// Outline radius as a fraction of half the cube size. The artwork keeps the
+// cube face's exact scale on every shape; the silhouette grows around it.
 const SHAPE_RADIUS: Record<ShapeId, number> = {
   cube: 1,
-  circle: 1.25,
-  star: 1.2,
-  triangle: 1.15,
+  circle: 1.26,
+  star: 3.04,
+  triangle: 2.6,
 };
 
 // A standard five-point ratio. It was set to 0.68 to stop the notches from
 // cutting the MTV lockup, but at that ratio the inner and outer radii sit so
 // close together that the outline reads as a lumpy decagon, not a star —
-// confirmed by screenshot, not just by the numbers. markHalfForShape already
-// exists to solve exactly this trade-off: it shrinks the mark, not the star.
+// confirmed by screenshot, not just by the numbers. The larger outline now
+// carries the cube-scale mark without flattening the star's notches.
 const STAR_INNER_RATIO = 0.44;
-
-// Artwork bounds in face UV that must stay inside the outline (logo + MUSIC).
-// Yellow face corners may clip; the lockup must not.
-const MARK_CONTENT = { u0: 0.12, u1: 0.88, v0: 0.08, v1: 0.90 };
-// Extra inset so type does not kiss the silhouette the way the screenshots did.
-const MARK_SILHOUETTE_PAD = 0.9;
 
 function starOutline(points: number, outer: number, inner: number) {
   const path = new THREE.Shape();
@@ -1163,9 +1161,8 @@ type TriangleDims = { top: number; bottom: number; base: number };
 // — the earlier "broad shield" (top 1.6·half, bottom 1.1·half, base 3.4·half)
 // widened the base far past the top specifically to keep the MTV lockup from
 // clipping, but the result reads as a wide flat dart rather than a triangle.
-// markHalfForShape already shrinks the mark to whatever the outline allows;
-// let the outline be a triangle and the mark give way, not the other way
-// round.
+// The outline grows around the shared cube-scale mark while staying a true
+// equilateral triangle.
 function triangleDims(half: number): TriangleDims {
   const radius = half * SHAPE_RADIUS.triangle;
   return {
@@ -1220,89 +1217,6 @@ function triangleOutline(half: number) {
     ],
     half * SHAPE_RADIUS.triangle * TRIANGLE_CORNER_RATIO,
   );
-}
-
-function pointInTriangle(y: number, z: number, dims: TriangleDims) {
-  if (y > dims.top * MARK_SILHOUETTE_PAD || y < -dims.bottom * MARK_SILHOUETTE_PAD) return false;
-  const width = dims.base * ((dims.top - y) / (dims.top + dims.bottom));
-  return Math.abs(z) <= width * MARK_SILHOUETTE_PAD;
-}
-
-function pointInStar(y: number, z: number, outer: number, inner: number) {
-  // Test against a padded-in copy of the mesh outline so type clears the notches.
-  const scale = MARK_SILHOUETTE_PAD;
-  const vertices: Array<{ y: number; z: number }> = [];
-  for (let index = 0; index < 10; index += 1) {
-    const angle = Math.PI / 2 + (index * Math.PI) / 5;
-    const radius = (index % 2 === 0 ? outer : inner) * scale;
-    vertices.push({ y: Math.sin(angle) * radius, z: Math.cos(angle) * radius });
-  }
-  let inside = false;
-  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i, i += 1) {
-    const yi = vertices[i].y;
-    const zi = vertices[i].z;
-    const yj = vertices[j].y;
-    const zj = vertices[j].z;
-    const intersect = yi > y !== yj > y && z < ((zj - zi) * (y - yi)) / (yj - yi) + zi;
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function pointInCircle(y: number, z: number, radius: number) {
-  return y * y + z * z <= (radius * MARK_SILHOUETTE_PAD) ** 2;
-}
-
-function contentFits(shape: ShapeId, half: number, markHalf: number) {
-  const samples: Array<{ u: number; v: number }> = [];
-  const steps = 6;
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    const u = MARK_CONTENT.u0 + (MARK_CONTENT.u1 - MARK_CONTENT.u0) * t;
-    const v = MARK_CONTENT.v0 + (MARK_CONTENT.v1 - MARK_CONTENT.v0) * t;
-    samples.push({ u, v: MARK_CONTENT.v0 }, { u, v: MARK_CONTENT.v1 });
-    samples.push({ u: MARK_CONTENT.u0, v }, { u: MARK_CONTENT.u1, v });
-  }
-  // Corners of the lockup matter most for clipping.
-  samples.push(
-    { u: MARK_CONTENT.u0, v: MARK_CONTENT.v0 },
-    { u: MARK_CONTENT.u1, v: MARK_CONTENT.v0 },
-    { u: MARK_CONTENT.u0, v: MARK_CONTENT.v1 },
-    { u: MARK_CONTENT.u1, v: MARK_CONTENT.v1 },
-  );
-
-  const dims = triangleDims(half);
-  const starOuter = half * SHAPE_RADIUS.star;
-  const starInner = starOuter * STAR_INNER_RATIO;
-  const circleRadius = half * SHAPE_RADIUS.circle;
-
-  for (const sample of samples) {
-    const z = (0.5 - sample.u) * markHalf * 2;
-    const y = (sample.v - 0.5) * markHalf * 2;
-    if (shape === "circle") {
-      if (!pointInCircle(y, z, circleRadius)) return false;
-    } else if (shape === "triangle") {
-      if (!pointInTriangle(y, z, dims)) return false;
-    } else if (shape === "star") {
-      if (!pointInStar(y, z, starOuter, starInner)) return false;
-    }
-  }
-  return true;
-}
-
-/* Largest mark half-extent where the lockup stays inside the silhouette.
- * Cube stays at `half`. Others shrink only as far as their outline requires. */
-function markHalfForShape(shape: ShapeId, half: number) {
-  if (shape === "cube") return half;
-  let lo = half * 0.35;
-  let hi = half;
-  if (contentFits(shape, half, hi)) return hi;
-  for (let step = 0; step < 20; step += 1) {
-    const mid = (lo + hi) / 2;
-    if (contentFits(shape, half, mid)) lo = mid;
-    else hi = mid;
-  }
-  return lo;
 }
 
 function extrudeAlongX(shape: THREE.Shape, size: number, curveSegments = 1) {
@@ -1406,17 +1320,16 @@ function isolateExtrudedFrontCap(geometry: THREE.BufferGeometry) {
   geometry.addGroup(runStart, slotCount - runStart, runMaterial);
 }
 
-// Mark maps through markHalfForShape so the lockup stays inside each outline.
 /* Each geometry type lays its UVs out differently — extrusions use world units
  * outright, which blows the texture up far past the shape. Rewrite the UVs on
- * the +x cap from vertex positions: u across -z, v up +y, scaled to the largest
- * mark square that still keeps logo + MUSIC inside the silhouette. */
+ * the +x cap from vertex positions. Every outline uses the cube face's exact
+ * UV scale, so the logo and MUSIC remain the same size across shapes. */
 function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number) {
   if (shape === "cube") return;
   const position = geometry.getAttribute("position");
   const uv = geometry.getAttribute("uv");
   if (!position || !uv) return;
-  const markHalf = markHalfForShape(shape, half);
+  const markHalf = half;
   // Matches markedGroupIndex's tolerance, so the bevel rim gets mapped along
   // with the flat cap instead of left with the extrusion's default UVs.
   const tolerance = half * 0.09;
@@ -1482,7 +1395,10 @@ function shapeContactPoints(shape: ShapeId, half: number): Vec3[] {
 function shapeFootprint(shape: ShapeId, cubeSize: number) {
   const half = cubeSize / 2;
   if (shape === "circle" || shape === "star") return cubeSize * SHAPE_RADIUS[shape];
-  if (shape === "triangle") return triangleDims(half).base * 2;
+  if (shape === "triangle") {
+    const { top, bottom, base } = triangleDims(half);
+    return Math.max(base * 2, top + bottom);
+  }
   return cubeSize;
 }
 
@@ -1490,7 +1406,7 @@ function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: Mo
   const footprint = Math.max(shapeFootprint(shape, cubeSize), shapeFootprint(shapeB, cubeSize));
   const shapePitch = footprint * 1.55;
   if (mode === "roll") return Math.max(BASE_SPACING, cubeSize * ROLL_SPACING, shapePitch);
-  if (mode === "flip") return FLIP_GRID_SPACING;
+  if (mode === "flip") return Math.max(FLIP_GRID_SPACING, footprint * FLIP_SHAPE_GAP);
   return Math.max(BASE_SPACING, shapePitch);
 }
 
@@ -1584,7 +1500,9 @@ function buildThreeScene(
     metalness: 0,
   });
 
-  const shapesNeeded: ShapeId[] = [settings.shape];
+  const shapesNeeded: ShapeId[] = settings.mode === "flip"
+    ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
+    : [settings.shape];
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
   const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
   const half = settings.cubeSize / 2;
@@ -1617,7 +1535,9 @@ function buildThreeScene(
       const z = settings.mode === "flip"
         ? (col - (columns - 1) / 2) * spacing
         : (row - (rows - 1) / 2) * spacing;
-      const pair = { startShape: settings.shape, endShape: settings.shape };
+      const pair = settings.mode === "flip"
+        ? flipPair(row, col, settings.shape, settings.shapeB)
+        : { startShape: settings.shape, endShape: settings.shape };
       const startGeometry = geometryByShape[pair.startShape] ?? cubeGeometry;
       const startMaterials = materialsByShape[pair.startShape] ?? cubeMaterials;
       const mesh = new THREE.Mesh(startGeometry, startMaterials);
@@ -1641,7 +1561,12 @@ function buildThreeScene(
     }
   }
 
-  const floorSize = Math.max(3200, state.extent * 7);
+  const floorSize = Math.max(
+    3200,
+    settings.mode === "flip"
+      ? Math.max(state.gridColumns, state.gridRows) * state.gridSpacing * 1.35
+      : state.extent * 7,
+  );
   const groundGeometry = new THREE.PlaneGeometry(floorSize, floorSize);
   const groundMaterial = new THREE.MeshStandardMaterial({
     color: settings.background,
@@ -1983,7 +1908,17 @@ export default function WtvCubeStudio() {
         return { ...current, shape: nextShape, shapeB: nextShapeB };
       }
       if (key === "mode" && value === "flip") {
-        return { ...current, mode: "flip", shape: "circle", shapeB: "circle" };
+        return {
+          ...current,
+          mode: "flip",
+          shape: "circle",
+          shapeB: "circle",
+          density: 4,
+          cubeSize: 56,
+          cameraYaw: REFERENCE_CAMERA_YAW,
+          cameraPitch: REFERENCE_CAMERA_PITCH,
+          cameraZoom: 150,
+        };
       }
       return { ...current, [key]: value };
     });
