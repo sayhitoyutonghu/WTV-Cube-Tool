@@ -1147,12 +1147,14 @@ const SHAPE_RADIUS: Record<ShapeId, number> = {
   triangle: 2.05,
 };
 
-// A standard five-point ratio. It was once set to 0.68 to stop the notches
-// from cutting the MTV lockup, but at that ratio the inner and outer radii sit
-// so close together that the outline reads as a lumpy decagon, not a star —
-// confirmed by screenshot, not just by the numbers. The lockup is scaled to
-// fit the notches now, so the star keeps its proper proportions.
-const STAR_INNER_RATIO = 0.44;
+// How far the notches cut in, as a fraction of the outer radius. This is what
+// sets both how fat the star's body reads and — through SHAPE_MARK_ROOM — how
+// much lockup it can carry, since the mark has to clear the notch circle. At
+// the old 0.44 the body was too lean to hold the mark at anything near the
+// scale the other outlines give it. Pushing it out to 0.58 opens the centre
+// without reaching 0.68, where the inner and outer radii sit close enough that
+// the outline reads as a lumpy decagon rather than a star.
+const STAR_INNER_RATIO = 0.58;
 
 // Distance from the face centre to the corner of the drawn lockup, in half-cube
 // units, taken from drawMark's layout: the artwork spans 0.82 of the face wide
@@ -1179,18 +1181,19 @@ function markScaleFor(shape: ShapeId) {
 }
 
 function starOutline(points: number, outer: number, inner: number) {
-  const path = new THREE.Shape();
+  const vertices: Array<{ x: number; y: number }> = [];
   for (let index = 0; index < points * 2; index += 1) {
     // Start at the top so the star stands on two points rather than balancing.
     const angle = Math.PI / 2 + (index * Math.PI) / points;
     const radius = index % 2 === 0 ? outer : inner;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-    if (index === 0) path.moveTo(x, y);
-    else path.lineTo(x, y);
+    vertices.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
   }
-  path.closePath();
-  return path;
+  // Same fillet treatment and the same corner radius the triangle uses, so the
+  // two outlines share a family resemblance rather than one having needle tips
+  // beside the other's softened corners. roundedOutline's setback is clamped by
+  // the edge length, so the sharp tips and the shallow notches each take as
+  // much of that radius as their own angle allows.
+  return roundedOutline(vertices, outer * STAR_CORNER_RATIO);
 }
 
 type TriangleDims = { top: number; bottom: number; base: number };
@@ -1214,6 +1217,11 @@ function triangleDims(half: number): TriangleDims {
 // leave the silhouette reading as a triangle, large enough that the tips
 // don't present as needle-thin slivers when a corner catches the camera.
 const TRIANGLE_CORNER_RATIO = 0.16;
+
+// The star fillets its corners against its own radius on the same terms, so a
+// star and a triangle sitting side by side on the flip wall are cut from the
+// same tooling rather than one arriving with sharp points.
+const STAR_CORNER_RATIO = TRIANGLE_CORNER_RATIO;
 
 // A regular polygon with each corner rounded by a quadratic curve toward the
 // vertex — the cheap approximation of a tangent-arc fillet, close enough at
