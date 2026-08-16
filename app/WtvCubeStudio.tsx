@@ -689,7 +689,14 @@ function getMotion(
     const activeDuration = Math.max(0.5, sequenceDuration - FLIP_FINAL_HOLD);
     const finalFaceAligned = time >= activeDuration;
     const sequenceProgress = clamp(time / activeDuration, 0, 1);
-    const waveSpan = clamp(FLIP_WAVE_SPAN * (2.4 / alignSpeedScale), 0.48, 0.84);
+    // The last cell to be released still needs a whole turn inside the active
+    // window. Letting the spread run wider than that left it partway through
+    // its rotation when the hold began, and finalFaceAligned then snapped it
+    // the rest of the way in a single frame — a visible twitch across the
+    // trailing edge of the wave. Capping the spread lets every cell land on
+    // its own easing curve, which is what makes finalFaceAligned agree with
+    // the turn instead of overriding it.
+    const waveSpan = clamp(FLIP_WAVE_SPAN * (2.4 / alignSpeedScale), 0.48, 1 - FLIP_TURN_FRACTION);
     const local = sequenceProgress - stagger * waveSpan;
     const turnProgress = clamp(local / FLIP_TURN_FRACTION, 0, 1);
     return {
@@ -1124,21 +1131,52 @@ const SHAPE_LABELS: Record<ShapeId, string> = {
   triangle: "Triangle",
 };
 
-// Outline radius as a fraction of half the cube size. The artwork keeps the
-// cube face's exact scale on every shape; the silhouette grows around it.
+// Outline radius as a fraction of half the cube size, chosen so every shape
+// carries roughly the circle's visual mass rather than the same logo. Sizing
+// them to hold a full cube-scale lockup instead put the star at 3.04 and the
+// triangle at 2.6 — on a mixed flip wall those read as a different, much
+// larger object than the cube beside them, which is what the pairing is meant
+// to compare. Radii are equal-area against the circle, then nudged for how
+// each outline actually reads: a star's spread points look larger than its
+// area, a triangle's single mass looks smaller. The lockup now scales down to
+// fit these instead (SHAPE_MARK_ROOM).
 const SHAPE_RADIUS: Record<ShapeId, number> = {
   cube: 1,
   circle: 1.26,
-  star: 3.04,
-  triangle: 2.6,
+  star: 1.85,
+  triangle: 2.05,
 };
 
-// A standard five-point ratio. It was set to 0.68 to stop the notches from
-// cutting the MTV lockup, but at that ratio the inner and outer radii sit so
-// close together that the outline reads as a lumpy decagon, not a star —
-// confirmed by screenshot, not just by the numbers. The larger outline now
-// carries the cube-scale mark without flattening the star's notches.
+// A standard five-point ratio. It was once set to 0.68 to stop the notches
+// from cutting the MTV lockup, but at that ratio the inner and outer radii sit
+// so close together that the outline reads as a lumpy decagon, not a star —
+// confirmed by screenshot, not just by the numbers. The lockup is scaled to
+// fit the notches now, so the star keeps its proper proportions.
 const STAR_INNER_RATIO = 0.44;
+
+// Distance from the face centre to the corner of the drawn lockup, in half-cube
+// units, taken from drawMark's layout: the artwork spans 0.82 of the face wide
+// and the block plus subline runs from y 0.08 to about 0.85, so the corner sits
+// at hypot(0.41, 0.42) ≈ 0.587 of the face — 1.17 half-units.
+const MARK_CORNER_REACH = 1.17;
+
+// Share of its own radius each outline can actually give the lockup. A circle
+// offers all of it; a star only the notch circle through its inner vertices;
+// an equilateral triangle only its inradius, which is half the circumradius.
+const SHAPE_MARK_ROOM: Record<ShapeId, number> = {
+  cube: 1,
+  circle: 1,
+  star: STAR_INNER_RATIO,
+  triangle: 0.5,
+};
+
+// How large the lockup may be drawn on a shape, as a fraction of the cube-face
+// scale. The cube is the reference and always keeps it; the others take the
+// most their silhouette can hold without clipping.
+function markScaleFor(shape: ShapeId) {
+  if (shape === "cube") return 1;
+  return Math.min(1, (SHAPE_RADIUS[shape] * SHAPE_MARK_ROOM[shape]) / MARK_CORNER_REACH);
+}
 
 function starOutline(points: number, outer: number, inner: number) {
   const path = new THREE.Shape();
@@ -1329,7 +1367,11 @@ function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: numbe
   const position = geometry.getAttribute("position");
   const uv = geometry.getAttribute("uv");
   if (!position || !uv) return;
-  const markHalf = half;
+  // The texture is painted onto this much of the cap, so a smaller value draws
+  // a smaller lockup and leaves the rest of the outline in the flat cube colour
+  // the texture is cleared to. Shapes that cannot hold the full cube-scale mark
+  // shrink it rather than growing themselves past the other outlines.
+  const markHalf = half * markScaleFor(shape);
   // Matches markedGroupIndex's tolerance, so the bevel rim gets mapped along
   // with the flat cap instead of left with the extrusion's default UVs.
   const tolerance = half * 0.09;
@@ -1403,7 +1445,13 @@ function shapeFootprint(shape: ShapeId, cubeSize: number) {
 }
 
 function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: MotionMode) {
-  const footprint = Math.max(shapeFootprint(shape, cubeSize), shapeFootprint(shapeB, cubeSize));
+  // Only flip puts both shapes on the field. Every other mode renders shape A
+  // alone, so widening their lattice to clear shape B thinned the grid to a
+  // handful of oversized solids for an outline that never appears — picking
+  // Star as the flip partner used to gut the roll field.
+  const footprint = mode === "flip"
+    ? Math.max(shapeFootprint(shape, cubeSize), shapeFootprint(shapeB, cubeSize))
+    : shapeFootprint(shape, cubeSize);
   const shapePitch = footprint * 1.55;
   if (mode === "roll") return Math.max(BASE_SPACING, cubeSize * ROLL_SPACING, shapePitch);
   if (mode === "flip") return Math.max(FLIP_GRID_SPACING, footprint * FLIP_SHAPE_GAP);

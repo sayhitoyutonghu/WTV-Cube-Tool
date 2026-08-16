@@ -116,10 +116,12 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const FLIP_GRID_SPACING = 80/, "flip should retain a compact minimum lattice for the default circle");
   assert.match(component, /const FLIP_SHAPE_GAP = 1\.12/, "flip should expand its pitch to fit large star and triangle silhouettes");
   assert.match(component, /mode === "flip"\) return Math\.max\(FLIP_GRID_SPACING, footprint \* FLIP_SHAPE_GAP\)/, "flip spacing should be based on the largest visible outline");
+  assert.match(component, /const footprint = mode === "flip"\s*\? Math\.max\(shapeFootprint\(shape, cubeSize\), shapeFootprint\(shapeB, cubeSize\)\)\s*: shapeFootprint\(shape, cubeSize\)/, "only flip renders shape B, so it must not widen the lattice of the modes that show shape A alone");
   assert.match(component, /settings\.mode === "flip"\s*\? Array\.from\(new Set<ShapeId>\(\[settings\.shape, settings\.shapeB\]\)\)/, "flip should build both selected shape geometries");
   assert.match(component, /settings\.mode === "flip"\s*\? flipPair\(row, col, settings\.shape, settings\.shapeB\)/, "flip should use the selected A/B pair on the checkerboard");
-  assert.match(component, /circle: 1\.26,[\s\S]*?star: 3\.04,[\s\S]*?triangle: 2\.6,/, "non-cube outlines should grow around a cube-scale logo");
-  assert.match(component, /const markHalf = half;/, "every shape should map the logo at the same size as the cube face");
+  assert.match(component, /circle: 1\.26,[\s\S]*?star: 1\.85,[\s\S]*?triangle: 2\.05,/, "every outline should read at a comparable size instead of growing around a cube-scale logo");
+  assert.match(component, /const markHalf = half \* markScaleFor\(shape\);/, "the lockup should scale to the outline that carries it");
+  assert.match(component, /star: STAR_INNER_RATIO,/, "the star should size its lockup to the notch circle it can actually hold");
   assert.match(component, /const FLIP_CAMERA_SCALE = 1\.12/, "the flip camera should push closer than the measured base framing");
   assert.match(component, /const FLIP_FINAL_HOLD = 1;/, "flip should reserve a full second for its aligned final tableau");
   assert.match(component, /ry: finalFaceAligned \? 0/, "every object should lock to an exact front-facing rotation during the final hold");
