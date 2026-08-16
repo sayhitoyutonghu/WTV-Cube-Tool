@@ -1180,7 +1180,7 @@ function markScaleFor(shape: ShapeId) {
   return Math.min(1, (SHAPE_RADIUS[shape] * SHAPE_MARK_ROOM[shape]) / MARK_CORNER_REACH);
 }
 
-function starOutline(points: number, outer: number, inner: number, cornerRadius: number) {
+function starOutline(points: number, outer: number, inner: number) {
   const vertices: Array<{ x: number; y: number }> = [];
   for (let index = 0; index < points * 2; index += 1) {
     // Start at the top so the star stands on two points rather than balancing.
@@ -1191,7 +1191,7 @@ function starOutline(points: number, outer: number, inner: number, cornerRadius:
   // Same fillet, same radius as the triangle, so the two outlines read as a
   // family rather than one arriving with needle points beside the other's
   // softened corners.
-  return roundedOutline(vertices, cornerRadius);
+  return roundedOutline(vertices);
 }
 
 type TriangleDims = { top: number; bottom: number; base: number };
@@ -1211,27 +1211,20 @@ function triangleDims(half: number): TriangleDims {
   };
 }
 
-// Corner radius as a fraction of the triangle's own radius. Small enough to
-// leave the silhouette reading as a triangle, large enough that the tips
-// don't present as needle-thin slivers when a corner catches the camera.
-const TRIANGLE_CORNER_RATIO = 0.16;
-
-// The one fillet radius every non-cube outline is cut with, in half-cube units,
-// so a star and a triangle side by side come off the same tooling instead of
-// each rounding against its own radius and landing somewhere different.
-const CORNER_RADIUS = SHAPE_RADIUS.triangle * TRIANGLE_CORNER_RATIO;
-
-// Ceiling on how much of an edge one corner may spend on its fillet. A fixed
-// radius meets a sharp vertex a long way back down the edge, and the star's
-// edges are a third the length of the triangle's — at the shared radius its
-// tips ate about 40% of each edge and the outline rounded off into a flower.
-// The triangle's corners sit at 16% and are untouched by this.
-const MAX_CORNER_EDGE_FRACTION = 0.18;
+// Share of its shorter edge every corner spends on its fillet. Rounding to a
+// fixed radius instead makes the softness depend on the corner's angle: at one
+// radius the triangle's 60° corners looked right while the star's narrow tips
+// swallowed 44% of each edge and its wide notches barely curved at all. Holding
+// the setback to a share of the edge gives every corner the same softness
+// whatever its angle, so a star's tips and notches match a triangle's corners.
+// For an equilateral triangle the setback comes out to exactly this fraction of
+// the side, so 0.16 reproduces the triangle's existing corners unchanged.
+const CORNER_EDGE_FRACTION = 0.16;
 
 // A regular polygon with each corner rounded by a quadratic curve toward the
 // vertex — the cheap approximation of a tangent-arc fillet, close enough at
 // this size and a fraction of the construction a true arc would take.
-function roundedOutline(vertices: Array<{ x: number; y: number }>, cornerRadius: number) {
+function roundedOutline(vertices: Array<{ x: number; y: number }>, edgeFraction = CORNER_EDGE_FRACTION) {
   const path = new THREE.Shape();
   const count = vertices.length;
   for (let index = 0; index < count; index += 1) {
@@ -1244,18 +1237,10 @@ function roundedOutline(vertices: Array<{ x: number; y: number }>, cornerRadius:
     const lenNext = Math.hypot(towardNext.x, towardNext.y) || 1;
     const unitPrev = { x: towardPrevious.x / lenPrev, y: towardPrevious.y / lenPrev };
     const unitNext = { x: towardNext.x / lenNext, y: towardNext.y / lenNext };
-    const cos = unitPrev.x * unitNext.x + unitPrev.y * unitNext.y;
-    const halfAngle = Math.acos(Math.max(-1, Math.min(1, cos))) / 2;
-    // Distance back from the vertex to the tangent point. The sharper the
-    // vertex the further back a given radius reaches, so it is also held to a
-    // share of the shorter edge — otherwise a narrow point consumes the whole
-    // edge and the corner stops reading as a corner.
-    const setback = Math.min(
-      lenPrev,
-      lenNext,
-      cornerRadius / Math.tan(halfAngle),
-      Math.min(lenPrev, lenNext) * MAX_CORNER_EDGE_FRACTION,
-    );
+    // Distance back from the vertex to the tangent point, measured off the edge
+    // rather than off a radius so that a narrow tip and a wide notch on the same
+    // outline come out equally soft.
+    const setback = Math.min(lenPrev, lenNext) * edgeFraction;
     const start = { x: current.x + unitPrev.x * setback, y: current.y + unitPrev.y * setback };
     const end = { x: current.x + unitNext.x * setback, y: current.y + unitNext.y * setback };
     if (index === 0) path.moveTo(start.x, start.y);
@@ -1274,7 +1259,6 @@ function triangleOutline(half: number) {
       { x: base, y: -bottom },
       { x: -base, y: -bottom },
     ],
-    half * CORNER_RADIUS,
   );
 }
 
@@ -1300,7 +1284,7 @@ function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry 
 
   if (shape === "star") {
     const radius = half * SHAPE_RADIUS.star;
-    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO, half * CORNER_RADIUS), size);
+    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size);
   }
 
   if (shape === "triangle") {
