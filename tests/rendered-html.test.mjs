@@ -112,7 +112,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /cameraVector\(90, 0\)/, "flip should lock the camera to a square front elevation");
   assert.match(component, /settings\.mode === "flip" \? 0 : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall");
   assert.match(component, /const sequenceProgress = clamp\(time \/ activeDuration, 0, 1\)/, "flip should run one reveal wave across the sequence");
-  assert.match(component, /ry: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn from their plain back to their marked front");
+  assert.match(component, /rz: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn about z, tipping top over bottom from their plain back to their marked front");
   assert.match(component, /const FLIP_GRID_SPACING = 80/, "flip should retain a compact minimum lattice for the default circle");
   assert.match(component, /const FLIP_SHAPE_GAP = 1\.12/, "flip should expand its pitch to fit large star and triangle silhouettes");
   assert.match(component, /mode === "flip"\) return Math\.max\(FLIP_GRID_SPACING, footprint \* FLIP_SHAPE_GAP\)/, "flip spacing should be based on the largest visible outline");
@@ -124,7 +124,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /star: STAR_INNER_RATIO,/, "the star should size its lockup to the notch circle it can actually hold");
   assert.match(component, /const FLIP_CAMERA_SCALE = 1\.12/, "the flip camera should push closer than the measured base framing");
   assert.match(component, /const FLIP_FINAL_HOLD = 1;/, "flip should reserve a full second for its aligned final tableau");
-  assert.match(component, /ry: finalFaceAligned \? 0/, "every object should lock to an exact front-facing rotation during the final hold");
+  assert.match(component, /rz: finalFaceAligned \? 0/, "every object should lock to an exact front-facing rotation during the final hold");
   assert.match(component, /const FLIP_SHORT_AXIS_COUNT = 14/, "the default flip framing should match the reference's dense fourteen-object short edge");
   assert.match(component, /width \/ \(\(state\.gridColumns \+ 0\.25\) \* state\.gridSpacing\)/, "flip framing should preserve the reference object scale across aspect ratios");
   assert.match(component, /mode: "flip",[\s\S]*?shape: "circle",[\s\S]*?shapeB: "circle",[\s\S]*?density: 4,[\s\S]*?cubeSize: 56,[\s\S]*?cameraZoom: 150/, "selecting flip should apply its reference defaults");

@@ -699,10 +699,15 @@ function getMotion(
     const waveSpan = clamp(FLIP_WAVE_SPAN * (2.4 / alignSpeedScale), 0.48, 1 - FLIP_TURN_FRACTION);
     const local = sequenceProgress - stagger * waveSpan;
     const turnProgress = clamp(local / FLIP_TURN_FRACTION, 0, 1);
+    // Turn about z, not y. The flip camera sits out on +x, so z is the axis
+    // running across the screen: rotating about it tips each cell top over
+    // bottom and foreshortens its height, the way the reference's keys do.
+    // Turning about y swung them like a door instead, narrowing to a vertical
+    // sliver — the same half turn, but reading as a swivel rather than a flip.
     return {
       rx: 0,
-      ry: finalFaceAligned ? 0 : Math.PI - flipEase(turnProgress) * Math.PI,
-      rz: 0,
+      ry: 0,
+      rz: finalFaceAligned ? 0 : Math.PI - flipEase(turnProgress) * Math.PI,
       lift: 0,
       offsetX: 0,
       offsetZ: 0,
