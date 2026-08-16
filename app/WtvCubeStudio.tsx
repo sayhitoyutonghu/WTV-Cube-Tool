@@ -101,6 +101,13 @@ const FLIP_SHAPE_GAP = 1.12;
 const FLIP_FINAL_HOLD = 1;
 const FLIP_WAVE_SPAN = 0.78;
 const FLIP_TURN_FRACTION = 0.18;
+// Every other mode renders a true cube-depth solid, which is correct for a
+// tumbling block but wrong for a card turn: at the edge-on midpoint a
+// full-depth shape still shows a whole second face, and the hard seam between
+// that face and the front one reads as a crease instead of a clean turn. Flip
+// mode builds its geometry this thin instead, so mid-turn is a slim card edge
+// like the reference footage rather than a box rotating in place.
+const FLIP_CARD_THICKNESS = 0.15;
 const FLIP_CAMERA_SCALE = 1.12;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
@@ -1235,24 +1242,28 @@ function extrudeAlongX(shape: THREE.Shape, size: number, curveSegments = 1) {
   return geometry;
 }
 
-function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry {
+// `size` sets the face footprint (radius/side length); `depth` sets how far
+// that face is extruded toward the camera. They're the same value everywhere
+// except flip mode, which passes a thin `depth` to get a card rather than a
+// block — see FLIP_CARD_THICKNESS.
+function buildShapeGeometry(shape: ShapeId, size: number, depth: number = size): THREE.BufferGeometry {
   const half = size / 2;
-  if (shape === "cube") return new THREE.BoxGeometry(size, size, size);
+  if (shape === "cube") return new THREE.BoxGeometry(depth, size, size);
 
   if (shape === "star") {
     const radius = half * SHAPE_RADIUS.star;
-    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size);
+    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), depth);
   }
 
   if (shape === "triangle") {
-    return extrudeAlongX(triangleOutline(half), size, 6);
+    return extrudeAlongX(triangleOutline(half), depth, 6);
   }
 
   // Circle as an extruded disc so caps and UVs match the star/triangle path.
   const radius = half * SHAPE_RADIUS.circle;
   const circle = new THREE.Shape();
   circle.absarc(0, 0, radius, 0, Math.PI * 2, false);
-  return extrudeAlongX(circle, size, 48);
+  return extrudeAlongX(circle, depth, 48);
 }
 
 /* Each geometry type orders its material groups differently, and an extrusion's
@@ -1324,23 +1335,26 @@ function isolateExtrudedFrontCap(geometry: THREE.BufferGeometry) {
  * outright, which blows the texture up far past the shape. Rewrite the UVs on
  * the +x cap from vertex positions. Every outline uses the cube face's exact
  * UV scale, so the logo and MUSIC remain the same size across shapes. */
-function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number) {
+// `faceHalf` scales the UVs so the logo reads at the same size on every
+// shape; `capHalf` locates the cap itself, which sits at half the extrusion
+// depth, not half the face size, whenever the two have been decoupled (flip
+// mode's thin cards — see FLIP_CARD_THICKNESS).
+function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, faceHalf: number, capHalf: number = faceHalf) {
   if (shape === "cube") return;
   const position = geometry.getAttribute("position");
   const uv = geometry.getAttribute("uv");
   if (!position || !uv) return;
-  const markHalf = half;
   // Matches markedGroupIndex's tolerance, so the bevel rim gets mapped along
   // with the flat cap instead of left with the extrusion's default UVs.
-  const tolerance = half * 0.09;
+  const tolerance = capHalf * 0.09;
   for (let index = 0; index < position.count; index += 1) {
     const x = position.getX(index);
     // Only the cap facing the camera-right carries the mark; leave the walls
     // and the far cap with whatever they had.
-    if (Math.abs(x - half) > tolerance) continue;
+    if (Math.abs(x - capHalf) > tolerance) continue;
     const z = position.getZ(index);
     const y = position.getY(index);
-    uv.setXY(index, 0.5 - z / (markHalf * 2), 0.5 + y / (markHalf * 2));
+    uv.setXY(index, 0.5 - z / (faceHalf * 2), 0.5 + y / (faceHalf * 2));
   }
   uv.needsUpdate = true;
 }
@@ -1506,16 +1520,21 @@ function buildThreeScene(
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
   const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
   const half = settings.cubeSize / 2;
+  // Flip's cards are extruded far thinner than their face, so the cap sits at
+  // half that thinner depth rather than half the face size — see
+  // buildShapeGeometry / applyCapUVs.
+  const shapeDepth = settings.mode === "flip" ? settings.cubeSize * FLIP_CARD_THICKNESS : settings.cubeSize;
+  const capHalf = shapeDepth / 2;
   for (const shape of shapesNeeded) {
-    const geometry = buildShapeGeometry(shape, settings.cubeSize);
-    applyCapUVs(geometry, shape, half);
+    const geometry = buildShapeGeometry(shape, settings.cubeSize, shapeDepth);
+    applyCapUVs(geometry, shape, half, capHalf);
     if (shape !== "cube") isolateExtrudedFrontCap(geometry);
     geometryByShape[shape] = geometry;
     materialsByShape[shape] = shape === "cube"
-      ? shapeMaterials(geometry, half, markedMaterial, faceMaterial)
+      ? shapeMaterials(geometry, capHalf, markedMaterial, faceMaterial)
       : [markedMaterial, faceMaterial];
   }
-  const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize);
+  const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize, shapeDepth);
   const cubeMaterials = materialsByShape[settings.shape] ?? [markedMaterial, faceMaterial];
   const contactByShape: Partial<Record<ShapeId, Vec3[]>> = {};
   for (const shape of shapesNeeded) {

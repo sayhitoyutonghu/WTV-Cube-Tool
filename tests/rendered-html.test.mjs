@@ -119,7 +119,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /settings\.mode === "flip"\s*\? Array\.from\(new Set<ShapeId>\(\[settings\.shape, settings\.shapeB\]\)\)/, "flip should build both selected shape geometries");
   assert.match(component, /settings\.mode === "flip"\s*\? flipPair\(row, col, settings\.shape, settings\.shapeB\)/, "flip should use the selected A/B pair on the checkerboard");
   assert.match(component, /circle: 1\.26,[\s\S]*?star: 3\.04,[\s\S]*?triangle: 2\.6,/, "non-cube outlines should grow around a cube-scale logo");
-  assert.match(component, /const markHalf = half;/, "every shape should map the logo at the same size as the cube face");
+  assert.match(component, /uv\.setXY\(index, 0\.5 - z \/ \(faceHalf \* 2\), 0\.5 \+ y \/ \(faceHalf \* 2\)\)/, "every shape should map the logo at the same size as the cube face");
   assert.match(component, /const FLIP_CAMERA_SCALE = 1\.12/, "the flip camera should push closer than the measured base framing");
   assert.match(component, /const FLIP_FINAL_HOLD = 1;/, "flip should reserve a full second for its aligned final tableau");
   assert.match(component, /ry: finalFaceAligned \? 0/, "every object should lock to an exact front-facing rotation during the final hold");
