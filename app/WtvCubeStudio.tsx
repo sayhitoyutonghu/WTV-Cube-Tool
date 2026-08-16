@@ -100,7 +100,13 @@ const FLIP_GRID_SPACING = 80;
 const FLIP_SHAPE_GAP = 1.12;
 const FLIP_FINAL_HOLD = 1;
 const FLIP_WAVE_SPAN = 0.78;
-const FLIP_TURN_FRACTION = 0.18;
+// Share of the active window one cell spends turning from its back to its
+// front. At 0.18 the half turn was over in about a second and a quarter and
+// read as a snap between two shapes rather than one object turning over. The
+// wave spread is capped at what is left of the window (see waveSpan), so
+// lengthening the turn also draws the cells closer together in time — more of
+// the field is mid-turn at once, which is the other half of reading slower.
+const FLIP_TURN_FRACTION = 0.3;
 const FLIP_CAMERA_SCALE = 1.12;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
@@ -1222,9 +1228,12 @@ function triangleDims(half: number): TriangleDims {
 // swallowed 44% of each edge and its wide notches barely curved at all. Holding
 // the setback to a share of the edge gives every corner the same softness
 // whatever its angle, so a star's tips and notches match a triangle's corners.
-// For an equilateral triangle the setback comes out to exactly this fraction of
-// the side, so 0.16 reproduces the triangle's existing corners unchanged.
-const CORNER_EDGE_FRACTION = 0.16;
+// Because it is a share rather than a radius, one value keeps every corner on
+// every outline equally soft: each gives up the same proportion of its edge.
+// Two corners meet on every edge, so it has to stay under 0.5 or one fillet
+// would run past its neighbour's. At 0.22 an edge keeps 56% of its length
+// straight, which still reads as a star rather than a flower.
+const CORNER_EDGE_FRACTION = 0.22;
 
 // A regular polygon with each corner rounded by a quadratic curve toward the
 // vertex — the cheap approximation of a tangent-arc fillet, close enough at
