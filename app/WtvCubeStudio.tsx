@@ -1304,7 +1304,11 @@ function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry 
 
   if (shape === "star") {
     const radius = half * SHAPE_RADIUS.star;
-    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size);
+    // Use the same curve tessellation as the triangle. Leaving the star on the
+    // default single segment turned every quadratic fillet into a straight
+    // chord, which is why its tips still looked horizontally sliced off even
+    // though both outlines shared the same roundedOutline path.
+    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size, 6);
   }
 
   if (shape === "triangle") {

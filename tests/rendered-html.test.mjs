@@ -115,6 +115,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /rz: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn about z, tipping top over bottom from their plain back to their marked front");
   assert.match(component, /const CORNER_EDGE_FRACTION = 0\.22/, "star tips, star notches and triangle corners should share the same softened edge fraction");
   assert.match(component, /return roundedOutline\(vertices\);/, "the star should use the shared rounded outline treatment");
+  assert.match(component, /extrudeAlongX\(starOutline\(5, radius, radius \* STAR_INNER_RATIO\), size, 6\)/, "star fillets should use the same six curve segments as the rounded triangle rather than flattening to one chord");
   assert.match(component, /function flipShapeCrossover/, "flip should hide the A/B geometry handoff inside a smooth edge-on crossover");
   assert.match(component, /const sharedSpan = Math\.min\(/, "outgoing and incoming shapes should converge on one edge width at the handoff");
   assert.match(component, /movement\.scale \* crossover\.face,[\s\S]*?movement\.scale \* crossover\.edge,/, "flip should smoothly suppress the face silhouette and match the edge span around the shape swap");
