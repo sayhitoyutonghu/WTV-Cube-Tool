@@ -113,6 +113,11 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /settings\.mode === "flip" \? 0 : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall");
   assert.match(component, /const sequenceProgress = clamp\(time \/ activeDuration, 0, 1\)/, "flip should run one reveal wave across the sequence");
   assert.match(component, /rz: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn about z, tipping top over bottom from their plain back to their marked front");
+  assert.match(component, /const CORNER_EDGE_FRACTION = 0\.22/, "star tips, star notches and triangle corners should share the same softened edge fraction");
+  assert.match(component, /return roundedOutline\(vertices\);/, "the star should use the shared rounded outline treatment");
+  assert.match(component, /function flipShapeCrossover/, "flip should hide the A/B geometry handoff inside a smooth edge-on crossover");
+  assert.match(component, /const sharedSpan = Math\.min\(/, "outgoing and incoming shapes should converge on one edge width at the handoff");
+  assert.match(component, /movement\.scale \* crossover\.face,[\s\S]*?movement\.scale \* crossover\.edge,/, "flip should smoothly suppress the face silhouette and match the edge span around the shape swap");
   assert.match(component, /const FLIP_GRID_SPACING = 80/, "flip should retain a compact minimum lattice for the default circle");
   assert.match(component, /const FLIP_SHAPE_GAP = 1\.12/, "flip should expand its pitch to fit large star and triangle silhouettes");
   assert.match(component, /mode === "flip"\) return Math\.max\(FLIP_GRID_SPACING, footprint \* FLIP_SHAPE_GAP\)/, "flip spacing should be based on the largest visible outline");

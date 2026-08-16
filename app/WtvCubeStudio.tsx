@@ -107,6 +107,12 @@ const FLIP_WAVE_SPAN = 0.78;
 // lengthening the turn also draws the cells closer together in time — more of
 // the field is mid-turn at once, which is the other half of reading slower.
 const FLIP_TURN_FRACTION = 0.3;
+// During a geometry swap, the outgoing and incoming outlines meet while the
+// solid is nearly edge-on. Suppress the last sliver of face silhouette inside
+// this window and converge both shapes on the same horizontal edge span; that
+// keeps different outlines from jumping width on the crossover frame.
+const FLIP_SHAPE_CROSSOVER_FACE = 0.42;
+const FLIP_CROSSOVER_FACE_SCALE = 0.08;
 const FLIP_CAMERA_SCALE = 1.12;
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
@@ -1463,6 +1469,37 @@ function shapeFootprint(shape: ShapeId, cubeSize: number) {
   return cubeSize;
 }
 
+// Exact width of an outline across the locked flip camera's horizontal z axis.
+// At the edge-on midpoint only this span and the solid's extrusion remain
+// visible, so matching it across A/B makes the geometry handoff continuous.
+function flipHorizontalSpan(shape: ShapeId, cubeSize: number) {
+  const half = cubeSize / 2;
+  if (shape === "circle") return cubeSize * SHAPE_RADIUS.circle;
+  if (shape === "star") return cubeSize * SHAPE_RADIUS.star * Math.cos(Math.PI / 10);
+  if (shape === "triangle") return triangleDims(half).base * 2;
+  return cubeSize;
+}
+
+function flipShapeCrossover(rotationZ: number, shownShape: ShapeId, startShape: ShapeId, endShape: ShapeId, cubeSize: number) {
+  const faceShare = Math.abs(Math.cos(rotationZ));
+  const t = clamp(faceShare / FLIP_SHAPE_CROSSOVER_FACE, 0, 1);
+  const faceEase = t * t * (3 - 2 * t);
+  const edgeBlend = 1 - faceEase;
+  const sharedSpan = Math.min(
+    flipHorizontalSpan(startShape, cubeSize),
+    flipHorizontalSpan(endShape, cubeSize),
+  );
+  const shownSpan = flipHorizontalSpan(shownShape, cubeSize);
+  return {
+    // Local y carries the recognizable face outline. Ease it almost flat around
+    // the swap so a frame that lands just before/after 90° cannot expose a cut.
+    face: 1 - edgeBlend * (1 - FLIP_CROSSOVER_FACE_SCALE),
+    // Keep the edge itself present, but make both geometries exactly the same
+    // width at 90° before restoring the incoming outline symmetrically.
+    edge: 1 + (sharedSpan / shownSpan - 1) * edgeBlend,
+  };
+}
+
 function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: MotionMode) {
   // Only flip puts both shapes on the field. Every other mode renders shape A
   // alone, so widening their lattice to clear shape B thinned the grid to a
@@ -1848,7 +1885,23 @@ function drawScene(
     const { cube, movement } = frame;
     cube.mesh.position.set(cube.x + movement.offsetX, frame.contactHeight, frame.centerZ);
     cube.mesh.rotation.set(movement.rx, movement.ry, movement.rz, "XYZ");
-    cube.mesh.scale.setScalar(movement.scale);
+    if (settings.mode === "flip") {
+      const shownShape = movement.revealed ? cube.endShape : cube.startShape;
+      const crossover = flipShapeCrossover(
+        movement.rz,
+        shownShape,
+        cube.startShape,
+        cube.endShape,
+        settings.cubeSize,
+      );
+      cube.mesh.scale.set(
+        movement.scale,
+        movement.scale * crossover.face,
+        movement.scale * crossover.edge,
+      );
+    } else {
+      cube.mesh.scale.setScalar(movement.scale);
+    }
   }
 
   const shadowStrength = clamp(settings.shadow / 100, 0, 1);
