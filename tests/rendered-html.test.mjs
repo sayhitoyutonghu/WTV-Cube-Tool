@@ -110,7 +110,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const lanes = new Map/, "the 3D renderer should prevent rolling cubes from interpenetrating in shared lanes");
   assert.match(component, /type MotionMode = "settle" \| "roll" \| "spin" \| "pop" \| "flip"/, "flip should remain a first-class motion mode alongside the new motions");
   assert.match(component, /cameraVector\(90, 0\)/, "flip should lock the camera to a square front elevation");
-  assert.match(component, /settings\.mode === "flip" \? 0 : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall");
+  assert.match(component, /settings\.mode === "flip" \? 0 : settings\.mode === "pop" \? popTarget : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall, and pop at the centre of its heap");
+  assert.match(component, /popSlots\.push\(\{ x, y: y \+ lift, z \}\)/, "the heap must clear the ground plane, or its lower half is buried and never shows");
   assert.match(component, /const sequenceProgress = clamp\(time \/ activeDuration, 0, 1\)/, "flip should run one reveal wave across the sequence");
   assert.match(component, /rz: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn about z, tipping top over bottom from their plain back to their marked front");
   assert.match(component, /const CORNER_EDGE_FRACTION = 0\.22/, "star tips, star notches and triangle corners should share the same softened edge fraction");

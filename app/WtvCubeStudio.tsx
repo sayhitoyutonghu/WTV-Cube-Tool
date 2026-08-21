@@ -124,6 +124,10 @@ const FLIP_CAMERA_SCALE = 1.12;
 // Radius of the heap, in body widths. Shared with the packing that lays the
 // resting positions out, so the two cannot drift apart.
 const POP_PACK_REACH = 3.2;
+// The heap is centred this many radii above the floor, so the whole of it
+// clears the ground plane. Centred on the origin like every other mode, the
+// bottom half was simply buried and the shapes down there never showed.
+const POP_PACK_LIFT = 1.12;
 // Minimum centre-to-centre spacing in the heap, in body widths. Below 1 the
 // bodies visibly interpenetrate; this is a packing, not a simulation, so the
 // separation has to be built into the layout rather than resolved on contact.
@@ -199,6 +203,13 @@ const COLOURWAYS: Record<string, { background: string; cube: string; ink: string
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+// One radius for the heap, shared by the packing, the framing and the camera
+// target. Density drives it: without this the Grid slider did nothing at all in
+// pop, because the heap takes its size from the body rather than from a lattice.
+function popPackRadius(cubeSize: number, density: number) {
+  return cubeSize * POP_PACK_REACH * clamp(density / 7, 0.55, 1.9);
 }
 
 function formatTimecode(value: number) {
@@ -1692,7 +1703,8 @@ function buildThreeScene(
   const popSlots: Array<{ x: number; y: number; z: number }> = [];
   if (settings.mode === "pop") {
     const pitch = settings.cubeSize * POP_PACK_PITCH;
-    const reach = settings.cubeSize * POP_PACK_REACH;
+    const reach = popPackRadius(settings.cubeSize, settings.density);
+    const lift = reach * POP_PACK_LIFT;
     const span = Math.ceil(reach / pitch);
     for (let ix = -span; ix <= span; ix += 1) {
       for (let iy = -span; iy <= span; iy += 1) {
@@ -1702,12 +1714,14 @@ function buildThreeScene(
           const y = iy * pitch + (hash(key + 2, 0) - 0.5) * pitch * POP_PACK_JITTER;
           const z = iz * pitch + (hash(key + 3, 0) - 0.5) * pitch * POP_PACK_JITTER;
           if (Math.hypot(x, y, z) > reach) continue;
-          popSlots.push({ x, y, z });
+          // Raised clear of the ground plane; see POP_PACK_LIFT.
+          popSlots.push({ x, y: y + lift, z });
         }
       }
     }
-    // Frame the heap, not the lattice the other modes are framed against.
-    state.extent = reach * 2.4;
+    // Frame the heap, not the lattice the other modes are framed against, and
+    // allow for the fact that it now sits above the floor rather than on it.
+    state.extent = (reach + lift) * 1.5;
   }
   let popSlot = 0;
 
@@ -1911,7 +1925,14 @@ function drawScene(
   const view = settings.mode === "flip" ? cameraVector(90, 0) : cameraVector(settings.cameraYaw, settings.cameraPitch);
   state.camera.position.set(view.x * 4200, view.y * 4200, view.z * 4200);
   state.camera.up.set(0, 1, 0);
-  state.camera.lookAt(0, settings.mode === "flip" ? 0 : settings.cubeSize * 0.18, 0);
+  // Pop has to be looked at where the heap actually is. Every other mode sits
+  // on the floor, so the shared target is just above it.
+  const popTarget = popPackRadius(settings.cubeSize, settings.density) * POP_PACK_LIFT;
+  state.camera.lookAt(
+    0,
+    settings.mode === "flip" ? 0 : settings.mode === "pop" ? popTarget : settings.cubeSize * 0.18,
+    0,
+  );
   state.camera.updateProjectionMatrix();
 
   const cubeFrames = state.cubes.map((cube) => {
@@ -2126,6 +2147,11 @@ export default function WtvCubeStudio() {
       // a different outline, which made a same-shape flip impossible to select
       // and contradicted flip's own defaults below, where both are circle. The
       // turn is a back-to-front reveal; changing outline across it is optional.
+      if (key === "mode" && value === "pop") {
+        // A heap read from up high flattens into a solid block. Drop the
+        // elevation and it reads as a pile with a silhouette.
+        return { ...current, mode: "pop", cameraYaw: 38, cameraPitch: 15, cameraZoom: 100 };
+      }
       if (key === "mode" && value === "flip") {
         return {
           ...current,
