@@ -39,6 +39,8 @@ const MOTION_LABELS: Record<MotionMode, string> = {
 type Settings = {
   density: number;
   cubeSize: number;
+  // Percent of the face. Flip only; see the build site.
+  cardThickness: number;
   sequenceDuration: number;
   rollTurns: number;
   motion: number;
@@ -137,62 +139,6 @@ const RESOLUTIONS: Record<Aspect, [number, number]> = {
   "1:1": [1080, 1080],
 };
 
-const PRESETS: Record<string, Partial<Settings>> = {
-  Reference: {
-    density: 7,
-    cubeSize: 76,
-    sequenceDuration: 8,
-    rollTurns: DEFAULT_ROLL_TURNS,
-    motion: 64,
-    gravity: 100,
-    bounce: 52,
-    speed: 0.75,
-    alignSpeed: 2.4,
-    shadow: 48,
-    cameraYaw: REFERENCE_CAMERA_YAW,
-    cameraPitch: REFERENCE_CAMERA_PITCH,
-    cameraZoom: REFERENCE_CAMERA_ZOOM,
-    background: "#f5df18",
-    cube: "#f1da1d",
-    ink: "#111111",
-  },
-  Broadcast: {
-    density: 6,
-    cubeSize: 84,
-    sequenceDuration: 5,
-    rollTurns: 2,
-    motion: 78,
-    gravity: 118,
-    bounce: 66,
-    speed: 1.15,
-    alignSpeed: 2.8,
-    shadow: 42,
-    cameraYaw: 40,
-    cameraPitch: 31,
-    cameraZoom: 104,
-    background: "#08a8df",
-    cube: "#fff348",
-    ink: "#111111",
-  },
-  Minimal: {
-    density: 5,
-    cubeSize: 94,
-    sequenceDuration: 7,
-    rollTurns: DEFAULT_ROLL_TURNS,
-    motion: 34,
-    gravity: 82,
-    bounce: 30,
-    speed: 0.72,
-    alignSpeed: 1.6,
-    shadow: 30,
-    cameraYaw: 50,
-    cameraPitch: 42,
-    cameraZoom: 92,
-    background: "#f0eee6",
-    cube: "#ff493d",
-    ink: "#111111",
-  },
-};
 
 // One hue per channel bumper, ground and faces a few points of saturation
 // apart. Keeping them that close is the Tunecubes move: the shapes are read by
@@ -202,22 +148,21 @@ const PRESETS: Record<string, Partial<Settings>> = {
 // Every ground clears 4.5:1 against the ink, so the mark holds on the faces.
 // That floor is why purple sits lighter than its palette swatch — at the
 // swatch's own lightness the logo goes to 2.8:1 and disappears.
+//
+// Chroma is capped at 0.21 in OKLCh. Matching the palette on HSL saturation
+// instead put green, red and magenta at 0.25-0.28, and a full screen of that
+// vibrates: HSL lightness is not a perceptual quantity, so the numbers that
+// read as comfortable on yellow read as glare on the hues either side of it.
+// Yellow is the one ground already approved on air, so its own chroma sets the
+// ceiling and its pair stays exactly as delivered.
 const COLOURWAYS: Record<string, { background: string; cube: string; ink: string }> = {
   Yellow:  { background: "#f5df18", cube: "#f1da1d", ink: "#111111" },
-  Green:   { background: "#18f557", cube: "#1cf159", ink: "#111111" },
-  Purple:  { background: "#9b63f8", cube: "#9c65f5", ink: "#111111" },
-  Blue:    { background: "#18b3f5", cube: "#1cb2f1", ink: "#111111" },
-  Red:     { background: "#f53c18", cube: "#f13f1c", ink: "#111111" },
-  Magenta: { background: "#f518c3", cube: "#f11cc1", ink: "#111111" },
+  Green:   { background: "#5bef72", cube: "#5aea70", ink: "#111111" },
+  Purple:  { background: "#9b64f6", cube: "#9661ef", ink: "#111111" },
+  Blue:    { background: "#18b3f5", cube: "#1daeee", ink: "#111111" },
+  Red:     { background: "#ef4628", cube: "#e84426", ink: "#111111" },
+  Magenta: { background: "#e150b8", cube: "#da4eb2", ink: "#111111" },
 };
-
-// A look preset carries colours of its own; label the swatch row to match when
-// they line up, and leave it unlabelled when they don't.
-function colourwayFor(background: string, cube: string) {
-  return Object.keys(COLOURWAYS).find(
-    (name) => COLOURWAYS[name].background === background && COLOURWAYS[name].cube === cube,
-  ) ?? null;
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -1307,25 +1252,35 @@ function triangleOutline(half: number) {
   );
 }
 
-function extrudeAlongX(shape: THREE.Shape, size: number, curveSegments = 1) {
+function extrudeAlongX(shape: THREE.Shape, size: number, curveSegments = 1, depth = size) {
   const half = size / 2;
+  const halfDepth = depth / 2;
   const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: size,
+    depth,
     bevelEnabled: true,
-    bevelThickness: half * 0.05,
-    bevelSize: half * 0.045,
+    // The bevel eats in from both caps. Left at a fraction of the face it would
+    // swallow a thin card whole and the front cap would stop being flat, so it
+    // is held against the depth as well.
+    bevelThickness: Math.min(half * 0.05, halfDepth * 0.4),
+    bevelSize: Math.min(half * 0.045, halfDepth * 0.36),
     bevelSegments: 2,
     curveSegments,
   });
   // Extrusion runs along +z; centre it, then turn that axis onto +x.
-  geometry.translate(0, 0, -half);
+  geometry.translate(0, 0, -halfDepth);
   geometry.rotateY(Math.PI / 2);
   return geometry;
 }
 
-function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry {
+// depth is the wall the turn shows edge-on. At the default it equals the face
+// and every cell is a solid block; pulled down it becomes a card, and at the
+// bottom of the range a coin. That is the whole point of the control: the A/B
+// swap happens at 90deg, so the thinner the wall, the less there is to see it in.
+function buildShapeGeometry(shape: ShapeId, size: number, depth = size): THREE.BufferGeometry {
   const half = size / 2;
-  if (shape === "cube") return new THREE.BoxGeometry(size, size, size);
+  // Box rather than an extruded square: identical at full depth, and it keeps
+  // the thin axis on x, the one the flip camera looks down.
+  if (shape === "cube") return new THREE.BoxGeometry(depth, size, size);
 
   if (shape === "star") {
     const radius = half * SHAPE_RADIUS.star;
@@ -1333,31 +1288,32 @@ function buildShapeGeometry(shape: ShapeId, size: number): THREE.BufferGeometry 
     // default single segment turned every quadratic fillet into a straight
     // chord, which is why its tips still looked horizontally sliced off even
     // though both outlines shared the same roundedOutline path.
-    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size, 6);
+    return extrudeAlongX(starOutline(5, radius, radius * STAR_INNER_RATIO), size, 6, depth);
   }
 
   if (shape === "triangle") {
-    return extrudeAlongX(triangleOutline(half), size, 6);
+    return extrudeAlongX(triangleOutline(half), size, 6, depth);
   }
 
   // Circle as an extruded disc so caps and UVs match the star/triangle path.
   const radius = half * SHAPE_RADIUS.circle;
   const circle = new THREE.Shape();
   circle.absarc(0, 0, radius, 0, Math.PI * 2, false);
-  return extrudeAlongX(circle, size, 48);
+  return extrudeAlongX(circle, size, 48, depth);
 }
 
 /* Each geometry type orders its material groups differently, and an extrusion's
  * order also depends on how it was built. Rather than keep a table of slots per
  * shape — which is what kept putting the mark on a wall — ask the geometry which
  * group actually sits on the +x cap. */
-function markedGroupIndex(geometry: THREE.BufferGeometry, half: number): number {
+function markedGroupIndex(geometry: THREE.BufferGeometry, half: number, capX = half): number {
   const position = geometry.getAttribute("position");
   const index = geometry.getIndex();
   if (!position || geometry.groups.length === 0) return 0;
   const vertexAt = (slot: number) => (index ? index.getX(slot) : slot);
-  // Wide enough to clear the bevel's inset (half * 0.05) with margin.
-  const tolerance = half * 0.09;
+  // Wide enough to clear the bevel's inset with margin, and never wider than
+  // the card is thick, or a thin one would match its own back face too.
+  const tolerance = Math.min(half * 0.09, capX * 0.5);
   let best = 0;
   let bestShare = -1;
   geometry.groups.forEach((group, groupIndex) => {
@@ -1368,7 +1324,7 @@ function markedGroupIndex(geometry: THREE.BufferGeometry, half: number): number 
       const vertex = vertexAt(slot);
       if (vertex >= position.count) continue;
       sampled += 1;
-      if (Math.abs(position.getX(vertex) - half) <= tolerance) onCap += 1;
+      if (Math.abs(position.getX(vertex) - capX) <= tolerance) onCap += 1;
     }
     const share = sampled > 0 ? onCap / sampled : 0;
     if (share > bestShare) {
@@ -1379,9 +1335,9 @@ function markedGroupIndex(geometry: THREE.BufferGeometry, half: number): number 
   return bestShare > 0.6 ? best : 0;
 }
 
-function shapeMaterials(geometry: THREE.BufferGeometry, half: number, marked: THREE.Material, plain: THREE.Material): THREE.Material[] {
+function shapeMaterials(geometry: THREE.BufferGeometry, half: number, marked: THREE.Material, plain: THREE.Material, capX = half): THREE.Material[] {
   const slots = Math.max(1, geometry.groups.length);
-  const markedSlot = markedGroupIndex(geometry, half);
+  const markedSlot = markedGroupIndex(geometry, half, capX);
   return Array.from({ length: slots }, (_, slot) => (slot === markedSlot ? marked : plain));
 }
 
@@ -1416,7 +1372,11 @@ function isolateExtrudedFrontCap(geometry: THREE.BufferGeometry) {
  * outright, which blows the texture up far past the shape. Rewrite the UVs on
  * the +x cap from vertex positions. Every outline uses the cube face's exact
  * UV scale, so the logo and MUSIC remain the same size across shapes. */
-function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number) {
+// half sizes the mark and belongs to the face; capX is where the front cap
+// actually sits, which is depth/2 and only equals half at full thickness. They
+// were the same value until the card could be thinned, and conflating them is
+// what makes a thin card lose its logo entirely: the cap test finds nothing.
+function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: number, capX = half) {
   if (shape === "cube") return;
   const position = geometry.getAttribute("position");
   const uv = geometry.getAttribute("uv");
@@ -1428,12 +1388,12 @@ function applyCapUVs(geometry: THREE.BufferGeometry, shape: ShapeId, half: numbe
   const markHalf = half * markScaleFor(shape);
   // Matches markedGroupIndex's tolerance, so the bevel rim gets mapped along
   // with the flat cap instead of left with the extrusion's default UVs.
-  const tolerance = half * 0.09;
+  const tolerance = Math.min(half * 0.09, capX * 0.5);
   for (let index = 0; index < position.count; index += 1) {
     const x = position.getX(index);
     // Only the cap facing the camera-right carries the mark; leave the walls
     // and the far cap with whatever they had.
-    if (Math.abs(x - half) > tolerance) continue;
+    if (Math.abs(x - capX) > tolerance) continue;
     const z = position.getZ(index);
     const y = position.getY(index);
     uv.setXY(index, 0.5 - z / (markHalf * 2), 0.5 + y / (markHalf * 2));
@@ -1639,16 +1599,23 @@ function buildThreeScene(
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
   const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
   const half = settings.cubeSize / 2;
+  // Thickness is a flip control. Every other mode wants the solid block, and
+  // this cache is keyed by shape alone, so a thin wall applied unconditionally
+  // would follow the shape straight into Drop, Roll and Spin.
+  const cardDepth = settings.mode === "flip"
+    ? settings.cubeSize * (settings.cardThickness / 100)
+    : settings.cubeSize;
+  const capX = cardDepth / 2;
   for (const shape of shapesNeeded) {
-    const geometry = buildShapeGeometry(shape, settings.cubeSize);
-    applyCapUVs(geometry, shape, half);
+    const geometry = buildShapeGeometry(shape, settings.cubeSize, cardDepth);
+    applyCapUVs(geometry, shape, half, capX);
     if (shape !== "cube") isolateExtrudedFrontCap(geometry);
     geometryByShape[shape] = geometry;
     materialsByShape[shape] = shape === "cube"
-      ? shapeMaterials(geometry, half, markedMaterial, faceMaterial)
+      ? shapeMaterials(geometry, half, markedMaterial, faceMaterial, capX)
       : [markedMaterial, faceMaterial];
   }
-  const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize);
+  const cubeGeometry = geometryByShape[settings.shape] ?? buildShapeGeometry(settings.shape, settings.cubeSize, cardDepth);
   const cubeMaterials = materialsByShape[settings.shape] ?? [markedMaterial, faceMaterial];
   const contactByShape: Partial<Record<ShapeId, Vec3[]>> = {};
   for (const shape of shapesNeeded) {
@@ -2000,12 +1967,12 @@ export default function WtvCubeStudio() {
   const [playhead, setPlayhead] = useState(0);
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [seed, setSeed] = useState(24);
-  const [preset, setPreset] = useState("Reference");
   const [colourway, setColourway] = useState<string | null>("Yellow");
   const [notice, setNotice] = useState("Live preview");
   const [settings, setSettings] = useState<Settings>({
     density: 7,
     cubeSize: 76,
+    cardThickness: 100,
     sequenceDuration: 8,
     rollTurns: DEFAULT_ROLL_TURNS,
     motion: 64,
@@ -2073,7 +2040,6 @@ export default function WtvCubeStudio() {
       return { ...current, [key]: value };
     });
     if (key === "background" || key === "cube" || key === "ink") setColourway(null);
-    setPreset("Custom");
   }, []);
 
   const activateDefaultLogo = useCallback(() => {
@@ -2142,18 +2108,6 @@ export default function WtvCubeStudio() {
     setTimeline(0);
     setNotice("NEW SEED");
     window.setTimeout(() => setNotice("Live preview"), 1000);
-  };
-
-  const applyPreset = (name: string) => {
-    const values = PRESETS[name];
-    setSettings((current) => {
-      const next = { ...current, ...values };
-      baseSequenceDurationRef.current = next.sequenceDuration * next.speed;
-      return next;
-    });
-    setPreset(name);
-    if (values?.background && values?.cube) setColourway(colourwayFor(values.background, values.cube));
-    setTimeline(0);
   };
 
   // Colour only — the motion, camera and grid stay exactly where they were, so
@@ -2323,7 +2277,6 @@ export default function WtvCubeStudio() {
     const nextYaw = clamp(drag.yaw + (event.clientX - drag.startX) * 0.16, 10, 80);
     const nextPitch = clamp(drag.pitch - (event.clientY - drag.startY) * 0.14, 12, 68);
     setSettings((current) => ({ ...current, cameraYaw: Math.round(nextYaw), cameraPitch: Math.round(nextPitch) }));
-    setPreset("Custom");
   };
 
   const endCameraDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -2337,7 +2290,6 @@ export default function WtvCubeStudio() {
     event.preventDefault();
     const zoomDelta = event.deltaY > 0 ? -4 : 4;
     setSettings((current) => ({ ...current, cameraZoom: clamp(current.cameraZoom + zoomDelta, 65, 150) }));
-    setPreset("Custom");
   };
 
   const controlCameraWithKeyboard = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
@@ -2352,7 +2304,6 @@ export default function WtvCubeStudio() {
       if (event.key === "-" ) return { ...current, cameraZoom: clamp(current.cameraZoom - 4, 65, 150) };
       return { ...current, cameraZoom: clamp(current.cameraZoom + 4, 65, 150) };
     });
-    setPreset("Custom");
   };
 
   const controlTimelineWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -2413,11 +2364,7 @@ export default function WtvCubeStudio() {
         </div>
 
         <aside className="control-panel">
-          <PanelSection title="Look" value={colourway ? `${preset} / ${colourway}` : preset} defaultOpen>
-            <div className="preset-grid">
-              {Object.keys(PRESETS).map((name) => <button key={name} type="button" className={preset === name ? "active" : ""} onClick={() => applyPreset(name)}>{name}</button>)}
-            </div>
-            <p className="camera-help" style={{ marginTop: 0 }}>Colourway</p>
+          <PanelSection title="Colourway" value={colourway ?? "Custom"} defaultOpen>
             <div className="preset-grid colourways">
               {Object.keys(COLOURWAYS).map((name) => (
                 <button
@@ -2499,6 +2446,17 @@ export default function WtvCubeStudio() {
                 step={1}
                 suffix={settings.mode === "spin" ? " × 360°" : " × 90°"}
                 onChange={(value) => updateSetting("rollTurns", value)}
+              />
+            )}
+            {settings.mode === "flip" && (
+              <RangeControl
+                label="Thickness"
+                value={settings.cardThickness}
+                min={6}
+                max={100}
+                step={2}
+                suffix="%"
+                onChange={(value) => updateSetting("cardThickness", value)}
               />
             )}
             <RangeControl label="Face align" value={settings.alignSpeed} min={0.75} max={4} step={0.05} suffix="x" onChange={(value) => updateSetting("alignSpeed", value)} />
