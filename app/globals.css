@@ -273,6 +273,14 @@ button { color: inherit; }
   color: var(--ink);
 }
 .preset-grid button:hover, .segmented button:hover { background: var(--hover-strong); }
+.preset-grid.colourways button { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.preset-grid.colourways .dot {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(17 17 17 / 0.28);
+}
 .preset-grid button.active, .segmented button.active { background: var(--ink); color: #fff; }
 
 .color-control, .control-label {

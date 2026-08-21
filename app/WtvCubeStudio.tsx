@@ -194,6 +194,31 @@ const PRESETS: Record<string, Partial<Settings>> = {
   },
 };
 
+// One hue per channel bumper, ground and faces a few points of saturation
+// apart. Keeping them that close is the Tunecubes move: the shapes are read by
+// their own shading and the shadow they drop, never by a value break against
+// the floor. Hues come from the slot machine palette the client signed off on.
+//
+// Every ground clears 4.5:1 against the ink, so the mark holds on the faces.
+// That floor is why purple sits lighter than its palette swatch — at the
+// swatch's own lightness the logo goes to 2.8:1 and disappears.
+const COLOURWAYS: Record<string, { background: string; cube: string; ink: string }> = {
+  Yellow:  { background: "#f5df18", cube: "#f1da1d", ink: "#111111" },
+  Green:   { background: "#18f557", cube: "#1cf159", ink: "#111111" },
+  Purple:  { background: "#9b63f8", cube: "#9c65f5", ink: "#111111" },
+  Blue:    { background: "#18b3f5", cube: "#1cb2f1", ink: "#111111" },
+  Red:     { background: "#f53c18", cube: "#f13f1c", ink: "#111111" },
+  Magenta: { background: "#f518c3", cube: "#f11cc1", ink: "#111111" },
+};
+
+// A look preset carries colours of its own; label the swatch row to match when
+// they line up, and leave it unlabelled when they don't.
+function colourwayFor(background: string, cube: string) {
+  return Object.keys(COLOURWAYS).find(
+    (name) => COLOURWAYS[name].background === background && COLOURWAYS[name].cube === cube,
+  ) ?? null;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -1976,6 +2001,7 @@ export default function WtvCubeStudio() {
   const [aspect, setAspect] = useState<Aspect>("16:9");
   const [seed, setSeed] = useState(24);
   const [preset, setPreset] = useState("Reference");
+  const [colourway, setColourway] = useState<string | null>("Yellow");
   const [notice, setNotice] = useState("Live preview");
   const [settings, setSettings] = useState<Settings>({
     density: 7,
@@ -2046,6 +2072,7 @@ export default function WtvCubeStudio() {
       }
       return { ...current, [key]: value };
     });
+    if (key === "background" || key === "cube" || key === "ink") setColourway(null);
     setPreset("Custom");
   }, []);
 
@@ -2125,7 +2152,15 @@ export default function WtvCubeStudio() {
       return next;
     });
     setPreset(name);
+    if (values?.background && values?.cube) setColourway(colourwayFor(values.background, values.cube));
     setTimeline(0);
+  };
+
+  // Colour only — the motion, camera and grid stay exactly where they were, so
+  // a colourway can be swapped mid-take without losing the setup.
+  const applyColourway = (name: string) => {
+    setSettings((current) => ({ ...current, ...COLOURWAYS[name] }));
+    setColourway(name);
   };
 
   const uploadLogo = (event: ChangeEvent<HTMLInputElement>) => {
@@ -2378,9 +2413,23 @@ export default function WtvCubeStudio() {
         </div>
 
         <aside className="control-panel">
-          <PanelSection title="Look" value={preset} defaultOpen>
+          <PanelSection title="Look" value={colourway ? `${preset} / ${colourway}` : preset} defaultOpen>
             <div className="preset-grid">
               {Object.keys(PRESETS).map((name) => <button key={name} type="button" className={preset === name ? "active" : ""} onClick={() => applyPreset(name)}>{name}</button>)}
+            </div>
+            <p className="camera-help" style={{ marginTop: 0 }}>Colourway</p>
+            <div className="preset-grid colourways">
+              {Object.keys(COLOURWAYS).map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={colourway === name ? "active" : ""}
+                  onClick={() => applyColourway(name)}
+                >
+                  <span className="dot" style={{ background: COLOURWAYS[name].background }} />
+                  {name}
+                </button>
+              ))}
             </div>
             <ColorControl label="Background" value={settings.background} onChange={(value) => updateSetting("background", value)} />
             <ColorControl label="Cube faces" value={settings.cube} onChange={(value) => updateSetting("cube", value)} />
