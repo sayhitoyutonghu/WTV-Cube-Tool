@@ -116,6 +116,23 @@ const FLIP_TURN_FRACTION = 0.3;
 const FLIP_SHAPE_CROSSOVER_FACE = 0.42;
 const FLIP_CROSSOVER_FACE_SCALE = 0.08;
 const FLIP_CAMERA_SCALE = 1.12;
+// Pop throws its bodies out of the middle of the field. The reference is a
+// force field sitting at the origin, so the throw is described in rings out
+// from there: how far apart in cells the rings launch, how much of the field
+// the stagger covers, and how hard a body is carried past its own cell before
+// it settles back onto it.
+const POP_RING_PITCH = 1.72;
+const POP_RING_SPAN = 4.5;
+// Without a little jitter a whole ring fires in lockstep and the burst reads as
+// a expanding outline rather than a crowd.
+const POP_RING_SCATTER = 0.14;
+const POP_FLIGHT = 0.95;
+const POP_OVERSHOOT = 0.12;
+// How small a body is while it is still collapsed at the centre. Not zero: at
+// zero it winks into being, and the throw should already be underway.
+const POP_SEED_SCALE = 0.14;
+const POP_TUMBLE = 2.8;
+
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
 const BASE_SPACING = 76 * 1.72;
@@ -557,6 +574,8 @@ function getMotion(
   sequenceDuration: number,
   cubeSize: number,
   rollTurns: number,
+  cellX: number,
+  cellZ: number,
 ): MotionPose {
   const random = hash(index + 1, seed);
   const strength = amount / 100;
@@ -648,26 +667,50 @@ function getMotion(
   }
 
   if (mode === "pop") {
-    const stagger = waveStagger(col, row, random);
-    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, 0.95, ROLL_STAGGER * 0.62);
+    // A body thrown out of the centre of the field, not a stamp swelling in
+    // place. Every cell begins collapsed at the origin and is carried out to
+    // its own lattice position, so the wave finally has a direction; the old
+    // version only scaled up where it already stood, which is why it read as
+    // inflating. Rings launch from the inside out, which is what makes the
+    // field look like one burst expanding instead of a diagonal fading up.
+    const radius = Math.hypot(cellX, cellZ);
+    const ring = radius / Math.max(1, cubeSize * POP_RING_PITCH);
+    const stagger = clamp(ring / POP_RING_SPAN + random * POP_RING_SCATTER, 0, 1);
+    const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, POP_FLIGHT, ROLL_STAGGER * 0.62);
+    // Tumble carried out of the centre, unwound to nothing on arrival so the
+    // mark still faces the camera on the settled frame every other mode ends on.
+    const spinX = (hash(index + 41, seed) - 0.5) * POP_TUMBLE * strength;
+    const spinY = (hash(index + 49, seed) - 0.5) * POP_TUMBLE * strength;
+    const spinZ = (hash(index + 57, seed) - 0.5) * POP_TUMBLE * strength;
     if (local <= 0) {
-      return { rx: 0, ry: 0, rz: 0, lift: 0.28, offsetX: 0, offsetZ: 0, scale: 0.001, revealed: false };
+      return {
+        rx: spinX, ry: spinY, rz: spinZ,
+        lift: 0,
+        offsetX: -cellX, offsetZ: -cellZ,
+        scale: POP_SEED_SCALE,
+        revealed: false,
+      };
     }
-    const tip = clamp(local / cycle, 0, 1);
-    // Overshoot then settle: graphic stamp rather than soft fade-in.
-    let scale = 1;
-    if (tip < 0.58) {
-      const t = tip / 0.58;
-      scale = t * t * 1.14;
-    } else if (tip < 0.82) {
-      const t = (tip - 0.58) / 0.24;
-      scale = 1.14 - t * 0.18;
-    } else {
-      const t = (tip - 0.82) / 0.18;
-      scale = 0.96 + t * t * (3 - 2 * t) * 0.04;
-    }
-    const lift = tip < 0.5 ? (1 - tip / 0.5) * 0.32 : 0;
-    return { rx: 0, ry: 0, rz: 0, lift, offsetX: 0, offsetZ: 0, scale: Math.max(0.001, scale), revealed: false };
+    const t = clamp(local / cycle, 0, 1);
+    // Fast out of the centre, decelerating into the cell. The cubic ease-out is
+    // the whole difference between being thrown and being inflated; this used
+    // to be t * t, which starts slow and accelerates into a hard stop.
+    const flight = 1 - Math.pow(1 - t, 3);
+    // Carried a little past its own cell and drawn back, the way a thrown body
+    // arrives. Vanishes at both ends, so it never fights the landing.
+    const overshoot = Math.sin(Math.PI * t) * POP_OVERSHOOT * (1 - t);
+    const travel = flight + overshoot;
+    const remaining = 1 - flight;
+    return {
+      rx: spinX * remaining,
+      ry: spinY * remaining,
+      rz: spinZ * remaining,
+      lift: 0,
+      offsetX: -cellX * (1 - travel),
+      offsetZ: -cellZ * (1 - travel),
+      scale: Math.max(0.001, POP_SEED_SCALE + (1 - POP_SEED_SCALE) * flight),
+      revealed: false,
+    };
   }
 
   // One reveal wave: every plain rear cap turns once onto its marked front.
@@ -902,6 +945,8 @@ function drawScene2dLegacy(
       settings.sequenceDuration,
       settings.cubeSize,
       settings.rollTurns,
+      cube.x,
+      cube.z,
     );
     const centerX = cube.x + movement.offsetX;
     const centerZ = cube.z + movement.offsetZ;
@@ -948,6 +993,8 @@ function drawScene2dLegacy(
       settings.sequenceDuration,
       settings.cubeSize,
       settings.rollTurns,
+      cube.x,
+      cube.z,
     );
     const localVertices: Vec3[] = [
       { x: -half, y: -half, z: -half },
@@ -1833,6 +1880,8 @@ function drawScene(
       settings.sequenceDuration,
       settings.cubeSize,
       settings.rollTurns,
+      cube.x,
+      cube.z,
     );
     const shownShape = movement.revealed ? cube.endShape : cube.startShape;
     const localVertices = movement.revealed ? cube.contactEnd : cube.contactStart;
