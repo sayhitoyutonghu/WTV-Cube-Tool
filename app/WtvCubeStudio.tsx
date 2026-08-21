@@ -133,9 +133,14 @@ const FRAMING = 0.5;
 const REFERENCE_CAMERA_YAW = 45;
 const REFERENCE_CAMERA_PITCH = 35;
 const REFERENCE_CAMERA_ZOOM = 94;
+// Delivery size. The wide and tall crops used to export at 720p while the
+// square already went out at 1080, so every finished bumper had to be upscaled
+// on the way into the edit. Framing is taken from the aspect ratio alone (see
+// extentFactor), so raising these changes sampling density and nothing else —
+// the same take renders identically, just larger.
 const RESOLUTIONS: Record<Aspect, [number, number]> = {
-  "16:9": [1280, 720],
-  "9:16": [720, 1280],
+  "16:9": [1920, 1080],
+  "9:16": [1080, 1920],
   "1:1": [1080, 1080],
 };
 

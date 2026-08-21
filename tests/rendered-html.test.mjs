@@ -117,6 +117,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /return roundedOutline\(vertices\);/, "the star should use the shared rounded outline treatment");
   assert.match(component, /extrudeAlongX\(starOutline\(5, radius, radius \* STAR_INNER_RATIO\), size, 6[,)]/, "star fillets should use the same six curve segments as the rounded triangle rather than flattening to one chord");
   assert.match(component, /function buildShapeGeometry\(shape: ShapeId, size: number, depth = size\)/, "shape geometry should take its extrusion depth separately from the face size");
+  assert.match(component, /"16:9": \[1920, 1080\],\s*\n\s*"9:16": \[1080, 1920\]/, "wide and tall crops should export at delivery size, not 720p");
   assert.match(component, /const tolerance = Math\.min\(half \* 0\.09, capX \* 0\.5\)/, "the front-cap test should follow the card's real depth, or a thinned card loses its mark");
   assert.match(component, /settings\.mode === "flip"\s*\n\s*\? settings\.cubeSize \* \(settings\.cardThickness \/ 100\)/, "thickness should apply to flip only, so the block modes keep full-depth geometry");
   assert.match(component, /function flipShapeCrossover/, "flip should hide the A/B geometry handoff inside a smooth edge-on crossover");
