@@ -131,7 +131,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /settings\.mode === "flip"\s*\? flipPair\(row, col, settings\.shape, settings\.shapeB\)/, "flip should use the selected A/B pair on the checkerboard");
   assert.doesNotMatch(component, /otherShape\(/, "picking one flip shape must not shove the other onto a different outline, or a same-shape flip cannot be selected");
   assert.match(component, /if \(startShape === endShape\) return \{ face: 1, edge: 1 \}/, "a same-shape flip has no handoff to hide, so it should not pinch at the midpoint");
-  assert.match(component, /offsetX: -cellX \* \(1 - travel\)/, "pop should throw each body out of the centre of the field rather than scale it up where it stands");
+  assert.match(component, /offsetX: -cellX \* \(1 - reach\)/, "pop should throw each body out of the centre of the field rather than scale it up where it stands");
+  assert.match(component, /offsetZ: -cellZ, scale: 0\.001, revealed: false/, "a body that has not been thrown yet must not render, or the whole waiting field stacks into one lump at the centre");
   assert.match(component, /const flight = 1 - Math\.pow\(1 - t, 3\)/, "the throw should ease out — accelerating into a stop reads as inflating, not popping");
   assert.match(component, /const stagger = clamp\(ring \/ POP_RING_SPAN/, "pop should launch in rings out from the centre, not on the shared diagonal wave");
   assert.match(component, /circle: 1\.26,[\s\S]*?star: 1\.85,[\s\S]*?triangle: 2\.05,/, "every outline should read at a comparable size instead of growing around a cube-scale logo");

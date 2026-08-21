@@ -128,9 +128,13 @@ const POP_RING_SPAN = 4.5;
 const POP_RING_SCATTER = 0.14;
 const POP_FLIGHT = 0.95;
 const POP_OVERSHOOT = 0.12;
-// How small a body is while it is still collapsed at the centre. Not zero: at
-// zero it winks into being, and the throw should already be underway.
+// How small a body is at the instant it is thrown. Not zero: at zero it winks
+// into being, and the throw should already be underway.
 const POP_SEED_SCALE = 0.14;
+// Bodies launch from a tight ring rather than from dead centre. Sharing one
+// point put every cell waiting its turn inside every other one, which rendered
+// as a single knot of intersecting geometry sitting in the middle of frame.
+const POP_LAUNCH_INSET = 0.13;
 const POP_TUMBLE = 2.8;
 
 // Grid pitch every mode is framed against, so switching modes never changes how
@@ -683,13 +687,9 @@ function getMotion(
     const spinY = (hash(index + 49, seed) - 0.5) * POP_TUMBLE * strength;
     const spinZ = (hash(index + 57, seed) - 0.5) * POP_TUMBLE * strength;
     if (local <= 0) {
-      return {
-        rx: spinX, ry: spinY, rz: spinZ,
-        lift: 0,
-        offsetX: -cellX, offsetZ: -cellZ,
-        scale: POP_SEED_SCALE,
-        revealed: false,
-      };
+      // Not yet thrown, and so not yet anywhere: parking these at the launch
+      // point stacked the whole waiting field into one lump at the centre.
+      return { rx: spinX, ry: spinY, rz: spinZ, lift: 0, offsetX: -cellX, offsetZ: -cellZ, scale: 0.001, revealed: false };
     }
     const t = clamp(local / cycle, 0, 1);
     // Fast out of the centre, decelerating into the cell. The cubic ease-out is
@@ -699,15 +699,17 @@ function getMotion(
     // Carried a little past its own cell and drawn back, the way a thrown body
     // arrives. Vanishes at both ends, so it never fights the landing.
     const overshoot = Math.sin(Math.PI * t) * POP_OVERSHOOT * (1 - t);
-    const travel = flight + overshoot;
+    // Measured from the launch ring rather than from the origin, so the burst
+    // starts as a cluster with size to it instead of a point.
+    const reach = POP_LAUNCH_INSET + (1 - POP_LAUNCH_INSET) * (flight + overshoot);
     const remaining = 1 - flight;
     return {
       rx: spinX * remaining,
       ry: spinY * remaining,
       rz: spinZ * remaining,
       lift: 0,
-      offsetX: -cellX * (1 - travel),
-      offsetZ: -cellZ * (1 - travel),
+      offsetX: -cellX * (1 - reach),
+      offsetZ: -cellZ * (1 - reach),
       scale: Math.max(0.001, POP_SEED_SCALE + (1 - POP_SEED_SCALE) * flight),
       revealed: false,
     };
