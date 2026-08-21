@@ -46,8 +46,12 @@ export type PopBakeInput = {
   spawnRadius: number;
 };
 
-/** Seven floats per body: position xyz, then quaternion xyzw. */
-export const POP_STRIDE = 7;
+/**
+ * Eight floats per body: position xyz, quaternion xyzw, then whether it has
+ * been released yet. A body that has not is not anywhere, and the renderer has
+ * to be told so rather than left to draw it wherever it was parked.
+ */
+export const POP_STRIDE = 8;
 
 export type PopBake = {
   frames: Float32Array[];
@@ -69,6 +73,10 @@ const LINEAR_DAMPING = 0.8;
 const ANGULAR_DAMPING = 0.1;
 // Blender's rigid body defaults, which the reference does not open.
 const FRICTION = 0.5;
+// Share of the sequence spent letting bodies in. They arrive one at a time
+// rather than all at once: twenty objects already in frame on the first frame
+// is a crowd that was always there, not a thing that pops.
+const RELEASE_SPAN = 0.45;
 
 function hash(value: number, seed: number) {
   const n = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
@@ -113,12 +121,8 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
   world.defaultContactMaterial.friction = FRICTION;
   world.defaultContactMaterial.restitution = restitution;
 
-  // Released as a block, the way the reference starts on an array of heads and
-  // lets the field draw them in.
-  const columns = Math.max(2, Math.round(Math.sqrt(bodies.length * 1.25)));
-  const rows = Math.max(1, Math.ceil(bodies.length / columns));
-  const pitch = (spawnRadius * 2) / Math.max(1, columns - 1);
   const dynamic: CANNON.Body[] = [];
+  const released: boolean[] = [];
 
   bodies.forEach((spec, index) => {
     const { shape, orientation } = makeShape(spec);
@@ -130,13 +134,17 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
     });
     body.addShape(shape, new CANNON.Vec3(0, 0, 0), orientation);
 
-    const col = index % columns;
-    const row = Math.floor(index / columns);
-    body.position.set(
-      (hash(index + 11, seed) - 0.5) * pitch * 0.9,
-      (row - (rows - 1) / 2) * pitch,
-      (col - (columns - 1) / 2) * pitch,
-    );
+    // Each body waits its turn out on a shell around the origin, aimed at it.
+    // Every direction is equally a starting point when there is no down.
+    const around = hash(index * 3 + 1, seed) * Math.PI * 2;
+    const elevation = Math.acos(1 - 2 * hash(index * 3 + 2, seed));
+    const distance = spawnRadius * (0.85 + hash(index * 3 + 3, seed) * 0.4);
+    const dirX = Math.sin(elevation) * Math.cos(around);
+    const dirY = Math.cos(elevation);
+    const dirZ = Math.sin(elevation) * Math.sin(around);
+    body.position.set(dirX * distance, dirY * distance, dirZ * distance);
+    const entry = cubeSize * (1.6 + hash(index + 61, seed) * 1.4);
+    body.velocity.set(-dirX * entry, -dirY * entry, -dirZ * entry);
     body.quaternion.setFromEuler(
       (hash(index + 41, seed) - 0.5) * Math.PI * 2,
       (hash(index + 49, seed) - 0.5) * Math.PI * 2,
@@ -150,8 +158,11 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
       (hash(index + 83, seed) - 0.5) * spin,
     );
 
-    world.addBody(body);
+    // Held out of the world until its turn: a body cannot be collided with
+    // before it exists, so this is what makes them arrive one at a time rather
+    // than merely become visible one at a time.
     dynamic.push(body);
+    released.push(false);
   });
 
   const frameCount = Math.max(2, Math.round(duration * fps) + 1);
@@ -159,10 +170,21 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
   const fixedStep = 1 / (fps * SUB_STEPS);
   const pull = GATHER * cubeSize * gatherScale;
 
+  const releaseAt = dynamic.map((_, index) =>
+    Math.floor((index / Math.max(1, dynamic.length)) * frameCount * RELEASE_SPAN),
+  );
+
   for (let frame = 0; frame < frameCount; frame += 1) {
+    releaseAt.forEach((due, index) => {
+      if (released[index] || frame < due) return;
+      world.addBody(dynamic[index]);
+      released[index] = true;
+    });
     if (frame > 0) {
       for (let sub = 0; sub < SUB_STEPS; sub += 1) {
-        for (const body of dynamic) {
+        for (let index = 0; index < dynamic.length; index += 1) {
+          if (!released[index]) continue;
+          const body = dynamic[index];
           const { x, y, z } = body.position;
           const distance = Math.hypot(x, y, z);
           if (distance <= 1e-3) continue;
@@ -183,6 +205,7 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
       slice[at + 4] = body.quaternion.y;
       slice[at + 5] = body.quaternion.z;
       slice[at + 6] = body.quaternion.w;
+      slice[at + 7] = released[index] ? 1 : 0;
     });
     frames.push(slice);
   }

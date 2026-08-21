@@ -2075,6 +2075,13 @@ function drawScene(
       const b = popBake.frames[after];
       const i = bodyIndex * POP_STRIDE;
       if (!a || !b || i + POP_STRIDE > a.length) return;
+      // Not let into the solve yet, so it is not anywhere. Bodies arrive one at
+      // a time; twenty of them already in frame on frame one is a crowd that
+      // was always there, not a thing that pops.
+      if (a[i + 7] < 0.5) {
+        cube.mesh.scale.setScalar(0);
+        return;
+      }
       cube.mesh.position.set(
         a[i] + (b[i] - a[i]) * mix,
         a[i + 1] + (b[i + 1] - a[i + 1]) * mix,
@@ -2235,7 +2242,7 @@ export default function WtvCubeStudio() {
       if (key === "mode" && value === "pop") {
         // The clump floats on the camera's own centre, so it reads from more or
         // less head on. Any elevation just tips a ball.
-        return { ...current, mode: "pop", cameraYaw: 45, cameraPitch: 8, cameraZoom: 100 };
+        return { ...current, mode: "pop", cameraYaw: 90, cameraPitch: 0, cameraZoom: 100 };
       }
       if (key === "mode" && value === "flip") {
         return {
@@ -2487,8 +2494,8 @@ export default function WtvCubeStudio() {
   const moveCamera = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const drag = cameraDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const nextYaw = clamp(drag.yaw + (event.clientX - drag.startX) * 0.16, 10, 80);
-    const nextPitch = clamp(drag.pitch - (event.clientY - drag.startY) * 0.14, 12, 68);
+    const nextYaw = clamp(drag.yaw + (event.clientX - drag.startX) * 0.16, 10, 90);
+    const nextPitch = clamp(drag.pitch - (event.clientY - drag.startY) * 0.14, 0, 68);
     setSettings((current) => ({ ...current, cameraYaw: Math.round(nextYaw), cameraPitch: Math.round(nextPitch) }));
   };
 
@@ -2510,10 +2517,10 @@ export default function WtvCubeStudio() {
     if (!cameraKeys.includes(event.key)) return;
     event.preventDefault();
     setSettings((current) => {
-      if (event.key === "ArrowLeft") return { ...current, cameraYaw: clamp(current.cameraYaw - 2, 10, 80) };
-      if (event.key === "ArrowRight") return { ...current, cameraYaw: clamp(current.cameraYaw + 2, 10, 80) };
-      if (event.key === "ArrowUp") return { ...current, cameraPitch: clamp(current.cameraPitch + 2, 12, 68) };
-      if (event.key === "ArrowDown") return { ...current, cameraPitch: clamp(current.cameraPitch - 2, 12, 68) };
+      if (event.key === "ArrowLeft") return { ...current, cameraYaw: clamp(current.cameraYaw - 2, 10, 90) };
+      if (event.key === "ArrowRight") return { ...current, cameraYaw: clamp(current.cameraYaw + 2, 10, 90) };
+      if (event.key === "ArrowUp") return { ...current, cameraPitch: clamp(current.cameraPitch + 2, 0, 68) };
+      if (event.key === "ArrowDown") return { ...current, cameraPitch: clamp(current.cameraPitch - 2, 0, 68) };
       if (event.key === "-" ) return { ...current, cameraZoom: clamp(current.cameraZoom - 4, 65, 150) };
       return { ...current, cameraZoom: clamp(current.cameraZoom + 4, 65, 150) };
     });
@@ -2677,8 +2684,8 @@ export default function WtvCubeStudio() {
           </PanelSection>
 
           <PanelSection title="Camera" value={settings.mode === "flip" ? "Front" : `${settings.cameraYaw}\u00b0 / ${settings.cameraPitch}\u00b0`}>
-            {settings.mode !== "flip" && <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={80} suffix="\u00b0" onChange={(value) => updateSetting("cameraYaw", value)} />}
-            {settings.mode !== "flip" && <RangeControl label="Elevation" value={settings.cameraPitch} min={12} max={68} suffix="\u00b0" onChange={(value) => updateSetting("cameraPitch", value)} />}
+            {settings.mode !== "flip" && <RangeControl label="Orbit" value={settings.cameraYaw} min={10} max={90} suffix="\u00b0" onChange={(value) => updateSetting("cameraYaw", value)} />}
+            {settings.mode !== "flip" && <RangeControl label="Elevation" value={settings.cameraPitch} min={0} max={68} suffix="\u00b0" onChange={(value) => updateSetting("cameraPitch", value)} />}
             <RangeControl label="Zoom" value={settings.cameraZoom} min={65} max={150} suffix="%" onChange={(value) => updateSetting("cameraZoom", value)} />
             <p className="camera-help">{settings.mode === "flip" ? "Flip uses a locked front elevation. Scroll to zoom." : "Drag on the preview to orbit. Scroll to zoom."}</p>
           </PanelSection>
