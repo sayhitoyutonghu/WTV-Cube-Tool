@@ -1688,10 +1688,14 @@ function buildThreeScene(
     metalness: 0,
   });
 
-  // Flip shows both outlines across the turn; pop mixes them through the heap.
-  const shapesNeeded: ShapeId[] = settings.mode === "flip" || settings.mode === "pop"
-    ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
-    : [settings.shape];
+  // Flip shows the two selected outlines across the turn. Pop takes all four:
+  // the reference gathers a crowd of different objects, and a clump of one or
+  // two outlines reads as a repeat rather than a crowd.
+  const shapesNeeded: ShapeId[] = settings.mode === "pop"
+    ? (Object.keys(SHAPE_LABELS) as ShapeId[])
+    : settings.mode === "flip"
+      ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
+      : [settings.shape];
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
   const materialsByShape: Partial<Record<ShapeId, THREE.Material[]>> = {};
   const half = settings.cubeSize / 2;
@@ -1745,9 +1749,13 @@ function buildThreeScene(
         : settings.mode === "flip"
           ? (col - (columns - 1) / 2) * spacing
           : (row - (rows - 1) / 2) * spacing;
-      // Flip pairs the two outlines across the turn; pop scatters them through
-      // the heap, so a body keeps whichever it was dealt from end to end.
-      const popShape = hash(index + 61, 0) < 0.5 ? settings.shape : settings.shapeB;
+      // Flip pairs its two outlines across the turn; pop deals every body one
+      // of the four and it keeps it from end to end.
+      const popOutlines = Object.keys(SHAPE_LABELS) as ShapeId[];
+      const popShape = popOutlines[Math.min(
+        popOutlines.length - 1,
+        Math.floor(hash(index + 61, 0) * popOutlines.length),
+      )];
       const pair = settings.mode === "flip"
         ? flipPair(row, col, settings.shape, settings.shapeB)
         : settings.mode === "pop"
@@ -2051,16 +2059,10 @@ function drawScene(
   }
 
   const popBake = settings.mode === "pop" ? state.popBake : null;
-  // The heap keeps whatever orientation it was solved into, then turns to face
-  // the camera together in the last beat. Slerped, not eased per axis, or a
-  // body that settled upside down takes the long way round.
-  const popAlign = popBake
-    ? (() => {
-        const timeline = clamp(time / Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
-        const phase = clamp((timeline - POP_ALIGN_START) / (1 - POP_ALIGN_START), 0, 1);
-        return phase * phase * (3 - 2 * phase);
-      })()
-    : 0;
+  // The turn onto the camera happens inside the solve, not here: the bodies are
+  // packed while pointing every which way, so turning them afterwards would
+  // leave that packing meaningless and run them through one another. What the
+  // bake hands back is already facing the right way.
   const popUpright = new THREE.Quaternion();
   const popSolved = new THREE.Quaternion();
 
@@ -2090,8 +2092,6 @@ function drawScene(
       popSolved.set(a[i + 3], a[i + 4], a[i + 5], a[i + 6]);
       popUpright.set(b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
       popSolved.slerp(popUpright, mix);
-      popUpright.identity();
-      popSolved.slerp(popUpright, popAlign);
       cube.mesh.quaternion.copy(popSolved);
       cube.mesh.scale.setScalar(1);
       return;
@@ -2630,7 +2630,7 @@ export default function WtvCubeStudio() {
                 </button>
               ))}
             </div>
-            <p className="camera-help">Flip waves A↔B on a checkerboard. Pick the same shape twice to turn one outline over. Logo stays inside every outline.</p>
+            <p className="camera-help">Flip waves A↔B on a checkerboard. Pick the same shape twice to turn one outline over. Pop ignores the pair and gathers all four. Logo stays inside every outline.</p>
           </PanelSection>
 
           <PanelSection title="Grid" value={`${settings.density} \u00d7 ${settings.cubeSize}px`}>

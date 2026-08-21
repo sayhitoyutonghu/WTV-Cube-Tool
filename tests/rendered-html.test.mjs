@@ -128,7 +128,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const FLIP_SHAPE_GAP = 1\.12/, "flip should expand its pitch to fit large star and triangle silhouettes");
   assert.match(component, /mode === "flip"\) return Math\.max\(FLIP_GRID_SPACING, footprint \* FLIP_SHAPE_GAP\)/, "flip spacing should be based on the largest visible outline");
   assert.match(component, /const footprint = mode === "flip"\s*\? Math\.max\(shapeFootprint\(shape, cubeSize\), shapeFootprint\(shapeB, cubeSize\)\)\s*: shapeFootprint\(shape, cubeSize\)/, "only flip renders shape B, so it must not widen the lattice of the modes that show shape A alone");
-  assert.match(component, /settings\.mode === "flip" \|\| settings\.mode === "pop"\s*\? Array\.from\(new Set<ShapeId>\(\[settings\.shape, settings\.shapeB\]\)\)/, "flip and pop both draw on the two selected outlines, so both geometries must be built");
+  assert.match(component, /settings\.mode === "flip"\s*\? Array\.from\(new Set<ShapeId>\(\[settings\.shape, settings\.shapeB\]\)\)/, "flip draws on both selected outlines across the turn, so both geometries must be built");
+  assert.match(component, /settings\.mode === "pop"\s*\? \(Object\.keys\(SHAPE_LABELS\) as ShapeId\[\]\)/, "pop gathers a crowd, so it takes all four outlines rather than the selected pair");
   assert.match(component, /settings\.mode === "flip"\s*\? flipPair\(row, col, settings\.shape, settings\.shapeB\)/, "flip should use the selected A/B pair on the checkerboard");
   assert.doesNotMatch(component, /otherShape\(/, "picking one flip shape must not shove the other onto a different outline, or a same-shape flip cannot be selected");
   assert.match(component, /if \(startShape === endShape\) return \{ face: 1, edge: 1 \}/, "a same-shape flip has no handoff to hide, so it should not pinch at the midpoint");
