@@ -133,7 +133,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.doesNotMatch(component, /otherShape\(/, "picking one flip shape must not shove the other onto a different outline, or a same-shape flip cannot be selected");
   assert.match(component, /if \(startShape === endShape\) return \{ face: 1, edge: 1 \}/, "a same-shape flip has no handoff to hide, so it should not pinch at the midpoint");
   assert.match(component, /offsetX: entryX \* \(1 - reach\)/, "pop should pull each body in from off frame to its place in the heap");
-  assert.match(component, /if \(Math\.hypot\(x, y, z\) > reach\) continue;/, "pop should rest as a heap clipped to a sphere, not on the lattice every other mode uses");
+  assert.match(component, /if \(Math\.hypot\(x \/ reach, y \/ height, z \/ reach\) > 1\) continue;/, "pop should rest as a column-shaped heap, not on the lattice every other mode uses");
+  assert.match(component, /rx: restX \* held \+ spinX \* remaining/, "the heap should hold its own orientations and only face the camera in the last beat, or it reads as a mosaic rather than a collision");
   assert.match(component, /offsetZ: entryZ, scale: 0\.001, revealed: false/, "a body still on its way in must not render, or a wide zoom catches the bodies queueing");
   assert.match(component, /const flight = 1 - Math\.pow\(1 - t, 3\)/, "the throw should ease out — accelerating into a stop reads as inflating, not popping");
   assert.match(component, /const stagger = clamp\(depth \* POP_ARRIVAL_SPREAD/, "bodies deep in the heap should arrive first, so the outside lands on top of them");

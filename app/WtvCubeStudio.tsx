@@ -128,10 +128,22 @@ const POP_PACK_REACH = 3.2;
 // clears the ground plane. Centred on the origin like every other mode, the
 // bottom half was simply buried and the shapes down there never showed.
 const POP_PACK_LIFT = 1.12;
-// Minimum centre-to-centre spacing in the heap, in body widths. Below 1 the
-// bodies visibly interpenetrate; this is a packing, not a simulation, so the
-// separation has to be built into the layout rather than resolved on contact.
-const POP_PACK_PITCH = 1.04;
+// Centre-to-centre spacing in the heap, as a share of the widest outline in
+// play. Under 1 the bodies press into each other, which is the point: a pile
+// reads as a pile because its parts are in contact. Nothing here resolves a
+// real contact, so the overlap is bounded by this number instead.
+const POP_PACK_PITCH = 0.84;
+// The heap is this much taller than it is wide. The reference stacks into a
+// column, not a ball, because its bodies are falling into each other.
+const POP_COLUMN_RATIO = 1.75;
+// Share of the sequence spent piled up before the heap turns to face the
+// camera together. A pile reads as a pile because nothing in it agrees, so the
+// bodies hold their own orientations for as long as possible; the mark only has
+// to be readable on the frame the cut to the payoff actually lands on.
+const POP_ALIGN_START = 0.74;
+// Spread of the resting orientations, scaled by Tumble so the disorder in the
+// heap is on the same control as the disorder in every other mode.
+const POP_REST_SPREAD = 1.8;
 // How far a body strays off its packing lattice point. Enough that no row of
 // the heap ever reads as a row; not so much that neighbours interpenetrate.
 const POP_PACK_JITTER = 0.55;
@@ -210,6 +222,12 @@ function clamp(value: number, min: number, max: number) {
 // pop, because the heap takes its size from the body rather than from a lattice.
 function popPackRadius(cubeSize: number, density: number) {
   return cubeSize * POP_PACK_REACH * clamp(density / 7, 0.55, 1.9);
+}
+
+// Half-height of the heap. Kept beside the radius so the packing, the framing
+// and the camera target cannot disagree about how tall the column is.
+function popPackHeight(cubeSize: number, density: number) {
+  return popPackRadius(cubeSize, density) * POP_COLUMN_RATIO;
 }
 
 function formatTimecode(value: number) {
@@ -701,16 +719,27 @@ function getMotion(
     const depth = clamp(homeLength / Math.max(1, cubeSize * POP_PACK_REACH), 0, 1);
     const stagger = clamp(depth * POP_ARRIVAL_SPREAD + random * POP_ARRIVAL_SCATTER, 0, 1);
     const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, POP_FLIGHT, ROLL_STAGGER * 0.62);
-    // Tumbling on the way in, unwound to nothing on arrival. The heap is
-    // disordered in position and ordered in rotation: that is what keeps every
-    // mark facing the camera on a frame where nothing else lines up.
     const spinX = (hash(index + 41, seed) - 0.5) * POP_TUMBLE * strength;
     const spinY = (hash(index + 49, seed) - 0.5) * POP_TUMBLE * strength;
     const spinZ = (hash(index + 57, seed) - 0.5) * POP_TUMBLE * strength;
+    // A body comes to rest at an orientation of its own and keeps it. Unwinding
+    // every rotation on arrival is what made the heap read as a mosaic rather
+    // than a collision: nothing in a pile agrees with anything else, and that
+    // disagreement is the whole of the effect.
+    const restX = (hash(index + 71, seed) - 0.5) * Math.PI * POP_REST_SPREAD * strength;
+    const restY = (hash(index + 79, seed) - 0.5) * Math.PI * POP_REST_SPREAD * strength;
+    const restZ = (hash(index + 83, seed) - 0.5) * Math.PI * POP_REST_SPREAD * strength;
+    // The heap holds its disorder, then turns to face the camera all together
+    // in the last beat. The mark only has to read on the frame the cut to the
+    // payoff lands on, so it buys the collision look for everything before it.
+    const timeline = clamp(time / Math.max(0.5, sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
+    const alignPhase = clamp((timeline - POP_ALIGN_START) / (1 - POP_ALIGN_START), 0, 1);
+    const alignEase = alignPhase * alignPhase * (3 - 2 * alignPhase);
+    const held = 1 - alignEase;
     if (local <= 0) {
       // Still on its way in from off frame. Held at nothing rather than drawn
       // out there, so a wide zoom can never catch the bodies queueing.
-      return { rx: spinX, ry: spinY, rz: spinZ, lift: 0, offsetX: entryX, offsetZ: entryZ, scale: 0.001, revealed: false };
+      return { rx: restX, ry: restY, rz: restZ, lift: 0, offsetX: entryX, offsetZ: entryZ, scale: 0.001, revealed: false };
     }
     const t = clamp(local / cycle, 0, 1);
     // Fast off the mark, decelerating in. The cubic ease-out is the whole
@@ -721,9 +750,9 @@ function getMotion(
     const reach = clamp(flight + overshoot, 0, 1.3);
     const remaining = 1 - flight;
     return {
-      rx: spinX * remaining,
-      ry: spinY * remaining,
-      rz: spinZ * remaining,
+      rx: restX * held + spinX * remaining,
+      ry: restY * held + spinY * remaining,
+      rz: restZ * held + spinZ * remaining,
       // lift carries the vertical leg of the approach; the heap floats where it
       // was packed rather than resting on the floor every other mode stands on.
       lift: (entryY * (1 - reach)) / Math.max(1, cubeSize),
@@ -1702,18 +1731,26 @@ function buildThreeScene(
   // reading as a row.
   const popSlots: Array<{ x: number; y: number; z: number }> = [];
   if (settings.mode === "pop") {
-    const pitch = settings.cubeSize * POP_PACK_PITCH;
+    // Pitched off the widest outline in play, or a field of stars would pack at
+    // cube spacing and bury itself.
+    const widest = Math.max(
+      shapeFootprint(settings.shape, settings.cubeSize),
+      shapeFootprint(settings.shapeB, settings.cubeSize),
+    );
+    const pitch = widest * POP_PACK_PITCH;
     const reach = popPackRadius(settings.cubeSize, settings.density);
-    const lift = reach * POP_PACK_LIFT;
-    const span = Math.ceil(reach / pitch);
-    for (let ix = -span; ix <= span; ix += 1) {
-      for (let iy = -span; iy <= span; iy += 1) {
-        for (let iz = -span; iz <= span; iz += 1) {
+    const height = popPackHeight(settings.cubeSize, settings.density);
+    const lift = height * POP_PACK_LIFT;
+    const spanXZ = Math.ceil(reach / pitch);
+    const spanY = Math.ceil(height / pitch);
+    for (let ix = -spanXZ; ix <= spanXZ; ix += 1) {
+      for (let iy = -spanY; iy <= spanY; iy += 1) {
+        for (let iz = -spanXZ; iz <= spanXZ; iz += 1) {
           const key = ix * 73856093 + iy * 19349663 + iz * 83492791;
           const x = ix * pitch + (hash(key + 1, 0) - 0.5) * pitch * POP_PACK_JITTER;
           const y = iy * pitch + (hash(key + 2, 0) - 0.5) * pitch * POP_PACK_JITTER;
           const z = iz * pitch + (hash(key + 3, 0) - 0.5) * pitch * POP_PACK_JITTER;
-          if (Math.hypot(x, y, z) > reach) continue;
+          if (Math.hypot(x / reach, y / height, z / reach) > 1) continue;
           // Raised clear of the ground plane; see POP_PACK_LIFT.
           popSlots.push({ x, y: y + lift, z });
         }
@@ -1721,7 +1758,7 @@ function buildThreeScene(
     }
     // Frame the heap, not the lattice the other modes are framed against, and
     // allow for the fact that it now sits above the floor rather than on it.
-    state.extent = (reach + lift) * 1.5;
+    state.extent = (height + lift) * 1.35;
   }
   let popSlot = 0;
 
@@ -1927,7 +1964,7 @@ function drawScene(
   state.camera.up.set(0, 1, 0);
   // Pop has to be looked at where the heap actually is. Every other mode sits
   // on the floor, so the shared target is just above it.
-  const popTarget = popPackRadius(settings.cubeSize, settings.density) * POP_PACK_LIFT;
+  const popTarget = popPackHeight(settings.cubeSize, settings.density) * POP_PACK_LIFT;
   state.camera.lookAt(
     0,
     settings.mode === "flip" ? 0 : settings.mode === "pop" ? popTarget : settings.cubeSize * 0.18,
