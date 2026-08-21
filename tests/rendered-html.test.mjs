@@ -111,7 +111,7 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /type MotionMode = "settle" \| "roll" \| "spin" \| "pop" \| "flip"/, "flip should remain a first-class motion mode alongside the new motions");
   assert.match(component, /cameraVector\(90, 0\)/, "flip should lock the camera to a square front elevation");
   assert.match(component, /settings\.mode === "flip" \? 0 : settings\.mode === "pop" \? popTarget : settings\.cubeSize \* 0\.18/, "the front camera should look at the centre of the flip wall, and pop at the centre of its heap");
-  assert.match(component, /popSlots\.push\(\{ x, y: y \+ lift, z \}\)/, "the heap must clear the ground plane, or its lower half is buried and never shows");
+  assert.match(component, /cube\.mesh\.quaternion\.copy\(popSolved\)/, "pop should read its transforms straight off the bake, quaternions included, not through the euler pose every other mode uses");
   assert.match(component, /const sequenceProgress = clamp\(time \/ activeDuration, 0, 1\)/, "flip should run one reveal wave across the sequence");
   assert.match(component, /rz: finalFaceAligned \? 0 : Math\.PI - flipEase\(turnProgress\) \* Math\.PI/, "objects should make one half-turn about z, tipping top over bottom from their plain back to their marked front");
   assert.match(component, /const CORNER_EDGE_FRACTION = 0\.22/, "star tips, star notches and triangle corners should share the same softened edge fraction");
@@ -133,7 +133,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.doesNotMatch(component, /otherShape\(/, "picking one flip shape must not shove the other onto a different outline, or a same-shape flip cannot be selected");
   assert.match(component, /if \(startShape === endShape\) return \{ face: 1, edge: 1 \}/, "a same-shape flip has no handoff to hide, so it should not pinch at the midpoint");
   assert.match(component, /offsetX: entryX \* \(1 - reach\)/, "pop should pull each body in from off frame to its place in the heap");
-  assert.match(component, /if \(Math\.hypot\(x \/ reach, y \/ height, z \/ reach\) > 1\) continue;/, "pop should rest as a column-shaped heap, not on the lattice every other mode uses");
+  assert.match(component, /state\.popBake = bakePopHeap\(\{/, "pop should solve its heap with rigid bodies rather than laying it out by hand");
+  assert.match(component, /if \(state\.popBakeKey !== popKey\)/, "the solve is the one thing here that cannot be evaluated at an arbitrary time, so it must be baked once and cached");
   assert.match(component, /rx: restX \* held \+ spinX \* remaining/, "the heap should hold its own orientations and only face the camera in the last beat, or it reads as a mosaic rather than a collision");
   assert.match(component, /offsetZ: entryZ, scale: 0\.001, revealed: false/, "a body still on its way in must not render, or a wide zoom catches the bodies queueing");
   assert.match(component, /const flight = 1 - Math\.pow\(1 - t, 3\)/, "the throw should ease out — accelerating into a stop reads as inflating, not popping");

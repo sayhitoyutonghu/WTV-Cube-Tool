@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { bakePopHeap, POP_STRIDE, type PopBake, type PopBodySpec } from "./popPhysics";
 
 type Aspect = "16:9" | "9:16" | "1:1";
 type MotionMode = "settle" | "roll" | "spin" | "pop" | "flip";
@@ -124,18 +125,6 @@ const FLIP_CAMERA_SCALE = 1.12;
 // Radius of the heap, in body widths. Shared with the packing that lays the
 // resting positions out, so the two cannot drift apart.
 const POP_PACK_REACH = 3.2;
-// The heap is centred this many radii above the floor, so the whole of it
-// clears the ground plane. Centred on the origin like every other mode, the
-// bottom half was simply buried and the shapes down there never showed.
-const POP_PACK_LIFT = 1.12;
-// Centre-to-centre spacing in the heap, as a share of the widest outline in
-// play. Under 1 the bodies press into each other, which is the point: a pile
-// reads as a pile because its parts are in contact. Nothing here resolves a
-// real contact, so the overlap is bounded by this number instead.
-const POP_PACK_PITCH = 0.84;
-// The heap is this much taller than it is wide. The reference stacks into a
-// column, not a ball, because its bodies are falling into each other.
-const POP_COLUMN_RATIO = 1.75;
 // Share of the sequence spent piled up before the heap turns to face the
 // camera together. A pile reads as a pile because nothing in it agrees, so the
 // bodies hold their own orientations for as long as possible; the mark only has
@@ -144,9 +133,6 @@ const POP_ALIGN_START = 0.74;
 // Spread of the resting orientations, scaled by Tumble so the disorder in the
 // heap is on the same control as the disorder in every other mode.
 const POP_REST_SPREAD = 1.8;
-// How far a body strays off its packing lattice point. Enough that no row of
-// the heap ever reads as a row; not so much that neighbours interpenetrate.
-const POP_PACK_JITTER = 0.55;
 // How far out a body starts, in body widths. Far enough to be off frame at
 // every crop, so a body is never seen waiting to be pulled in.
 const POP_ENTRY_DISTANCE = 26;
@@ -217,17 +203,15 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-// One radius for the heap, shared by the packing, the framing and the camera
-// target. Density drives it: without this the Grid slider did nothing at all in
-// pop, because the heap takes its size from the body rather than from a lattice.
-function popPackRadius(cubeSize: number, density: number) {
-  return cubeSize * POP_PACK_REACH * clamp(density / 7, 0.55, 1.9);
-}
-
-// Half-height of the heap. Kept beside the radius so the packing, the framing
-// and the camera target cannot disagree about how tall the column is.
-function popPackHeight(cubeSize: number, density: number) {
-  return popPackRadius(cubeSize, density) * POP_COLUMN_RATIO;
+// Collision proxies, not the drawn outline. A star is not convex and cannot be
+// solved as one hull, so every extruded outline is met as a disc of its own
+// footprint; packed this tightly the difference never surfaces, and the drawn
+// geometry is untouched either way.
+function popBodySpec(shape: ShapeId, cubeSize: number): PopBodySpec {
+  const half = cubeSize / 2;
+  if (shape === "cube") return { kind: "box", radius: half, depth: cubeSize };
+  const inset = shape === "star" ? 0.72 : shape === "triangle" ? 0.8 : 1;
+  return { kind: "disc", radius: half * SHAPE_RADIUS[shape] * inset, depth: cubeSize };
 }
 
 function formatTimecode(value: number) {
@@ -1145,6 +1129,8 @@ type ThreeSceneState = {
   cubes: ThreeCube[];
   cubeGeometry: THREE.BufferGeometry | null;
   cubeMaterials: THREE.Material[];
+  popBake: PopBake | null;
+  popBakeKey: string;
   geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>>;
   materialsByShape: Partial<Record<ShapeId, THREE.Material[]>>;
   brandTexture: THREE.CanvasTexture | null;
@@ -1672,7 +1658,11 @@ function buildThreeScene(
     ? Math.max(6, Math.round(flipShortAxisCount * Math.max(1, 1 / aspect)))
     : Math.max(4, Math.round(settings.density * (aspect > 1.2 ? 0.78 : aspect < 0.8 ? 1.45 : 1)));
   const spacing = gridSpacing(settings.shape, settings.shapeB, settings.cubeSize, settings.mode);
-  state.extent = Math.max(columns, rows) * BASE_SPACING * FRAMING;
+  // The solve decides how tall the heap ends up, so pop is framed off the one
+  // dimension that is fixed: the radius it is held to.
+  state.extent = settings.mode === "pop"
+    ? settings.cubeSize * 7.4
+    : Math.max(columns, rows) * BASE_SPACING * FRAMING;
   state.gridColumns = columns;
   state.gridRows = rows;
   state.gridSpacing = spacing;
@@ -1724,42 +1714,12 @@ function buildThreeScene(
   }
 
   const stride = columns + 3;
-  // Pop rests as a heap rather than a lattice: a jittered lattice clipped to a
-  // sphere. The lattice is what keeps bodies from interpenetrating — this is a
-  // packing, not a simulation, so separation has to be built into the positions
-  // instead of resolved on contact — and the jitter is what stops any row of it
-  // reading as a row.
-  const popSlots: Array<{ x: number; y: number; z: number }> = [];
-  if (settings.mode === "pop") {
-    // Pitched off the widest outline in play, or a field of stars would pack at
-    // cube spacing and bury itself.
-    const widest = Math.max(
-      shapeFootprint(settings.shape, settings.cubeSize),
-      shapeFootprint(settings.shapeB, settings.cubeSize),
-    );
-    const pitch = widest * POP_PACK_PITCH;
-    const reach = popPackRadius(settings.cubeSize, settings.density);
-    const height = popPackHeight(settings.cubeSize, settings.density);
-    const lift = height * POP_PACK_LIFT;
-    const spanXZ = Math.ceil(reach / pitch);
-    const spanY = Math.ceil(height / pitch);
-    for (let ix = -spanXZ; ix <= spanXZ; ix += 1) {
-      for (let iy = -spanY; iy <= spanY; iy += 1) {
-        for (let iz = -spanXZ; iz <= spanXZ; iz += 1) {
-          const key = ix * 73856093 + iy * 19349663 + iz * 83492791;
-          const x = ix * pitch + (hash(key + 1, 0) - 0.5) * pitch * POP_PACK_JITTER;
-          const y = iy * pitch + (hash(key + 2, 0) - 0.5) * pitch * POP_PACK_JITTER;
-          const z = iz * pitch + (hash(key + 3, 0) - 0.5) * pitch * POP_PACK_JITTER;
-          if (Math.hypot(x / reach, y / height, z / reach) > 1) continue;
-          // Raised clear of the ground plane; see POP_PACK_LIFT.
-          popSlots.push({ x, y: y + lift, z });
-        }
-      }
-    }
-    // Frame the heap, not the lattice the other modes are framed against, and
-    // allow for the fact that it now sits above the floor rather than on it.
-    state.extent = (height + lift) * 1.35;
-  }
+  // Pop no longer lays its bodies out at all: a contact solve decides where
+  // they end up, so all that is fixed here is how many there are. They are
+  // parked at the origin and the bake overwrites every transform each frame.
+  const popCount = settings.mode === "pop"
+    ? clamp(Math.round(settings.density * 6), 18, 140)
+    : 0;
   let popSlot = 0;
 
   const margin = settings.mode === "roll"
@@ -1768,8 +1728,8 @@ function buildThreeScene(
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
       const index = (row + margin + 1) * stride + col + 2;
-      const slot = settings.mode === "pop" ? popSlots[popSlot++] : undefined;
-      if (settings.mode === "pop" && !slot) continue;
+      if (settings.mode === "pop" && popSlot++ >= popCount) continue;
+      const slot = settings.mode === "pop" ? { x: 0, y: 0, z: 0 } : undefined;
       const staggerX = settings.mode === "flip" ? 0 : row % 2 === 0 ? 0 : spacing * 0.5;
       const x = slot ? slot.x : settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
       const y = slot ? slot.y : settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
@@ -1894,6 +1854,8 @@ function drawScene(
       cubes: [],
       cubeGeometry: null,
       cubeMaterials: [],
+      popBake: null,
+      popBakeKey: "",
       geometryByShape: {},
       materialsByShape: {},
       brandTexture: null,
@@ -1964,13 +1926,52 @@ function drawScene(
   state.camera.up.set(0, 1, 0);
   // Pop has to be looked at where the heap actually is. Every other mode sits
   // on the floor, so the shared target is just above it.
-  const popTarget = popPackHeight(settings.cubeSize, settings.density) * POP_PACK_LIFT;
+  // Halfway up a settled heap, which runs about three bodies tall.
+  const popTarget = settings.cubeSize * 1.7;
   state.camera.lookAt(
     0,
     settings.mode === "flip" ? 0 : settings.mode === "pop" ? popTarget : settings.cubeSize * 0.18,
     0,
   );
   state.camera.updateProjectionMatrix();
+
+  // Solve the whole sequence once and keep it. Contacts only exist in order,
+  // so this is the one thing in the studio that cannot be evaluated at an
+  // arbitrary time — bake it and every reader downstream stays a lookup.
+  if (settings.mode === "pop") {
+    const popKey = [
+      state.cubes.length,
+      settings.cubeSize,
+      settings.density,
+      settings.shape,
+      settings.shapeB,
+      settings.gravity,
+      settings.bounce,
+      settings.motion,
+      settings.sequenceDuration,
+      seed,
+    ].join("|");
+    if (state.popBakeKey !== popKey) {
+      state.popBake = bakePopHeap({
+        bodies: state.cubes.map((cube) => popBodySpec(cube.startShape, settings.cubeSize)),
+        cubeSize: settings.cubeSize,
+        gravity: settings.gravity,
+        bounce: settings.bounce,
+        tumble: settings.motion,
+        seed,
+        duration: settings.sequenceDuration,
+        fps: EXPORT_FPS,
+        // Released down the shaft of the column rather than thrown at it from
+        // outside: sideways speed at the rim is what used to send bodies over.
+        spawnRadius: settings.cubeSize * 1.6,
+        columnHeight: settings.cubeSize * 5.6,
+      });
+      state.popBakeKey = popKey;
+    }
+  } else if (state.popBake) {
+    state.popBake = null;
+    state.popBakeKey = "";
+  }
 
   const cubeFrames = state.cubes.map((cube) => {
     const movement = getMotion(
@@ -2039,8 +2040,45 @@ function drawScene(
     }
   }
 
-  for (const frame of cubeFrames) {
+  const popBake = settings.mode === "pop" ? state.popBake : null;
+  // The heap keeps whatever orientation it was solved into, then turns to face
+  // the camera together in the last beat. Slerped, not eased per axis, or a
+  // body that settled upside down takes the long way round.
+  const popAlign = popBake
+    ? (() => {
+        const timeline = clamp(time / Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
+        const phase = clamp((timeline - POP_ALIGN_START) / (1 - POP_ALIGN_START), 0, 1);
+        return phase * phase * (3 - 2 * phase);
+      })()
+    : 0;
+  const popUpright = new THREE.Quaternion();
+  const popSolved = new THREE.Quaternion();
+
+  cubeFrames.forEach((frame, bodyIndex) => {
     const { cube, movement } = frame;
+    if (popBake) {
+      const at = clamp(time * popBake.fps, 0, popBake.frames.length - 1);
+      const before = Math.floor(at);
+      const after = Math.min(before + 1, popBake.frames.length - 1);
+      const mix = at - before;
+      const a = popBake.frames[before];
+      const b = popBake.frames[after];
+      const i = bodyIndex * POP_STRIDE;
+      if (!a || !b || i + POP_STRIDE > a.length) return;
+      cube.mesh.position.set(
+        a[i] + (b[i] - a[i]) * mix,
+        a[i + 1] + (b[i + 1] - a[i + 1]) * mix,
+        a[i + 2] + (b[i + 2] - a[i + 2]) * mix,
+      );
+      popSolved.set(a[i + 3], a[i + 4], a[i + 5], a[i + 6]);
+      popUpright.set(b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
+      popSolved.slerp(popUpright, mix);
+      popUpright.identity();
+      popSolved.slerp(popUpright, popAlign);
+      cube.mesh.quaternion.copy(popSolved);
+      cube.mesh.scale.setScalar(1);
+      return;
+    }
     cube.mesh.position.set(cube.x + movement.offsetX, frame.contactHeight, frame.centerZ);
     cube.mesh.rotation.set(movement.rx, movement.ry, movement.rz, "XYZ");
     if (settings.mode === "flip") {
@@ -2060,7 +2098,7 @@ function drawScene(
     } else {
       cube.mesh.scale.setScalar(movement.scale);
     }
-  }
+  });
 
   const shadowStrength = clamp(settings.shadow / 100, 0, 1);
   if (state.keyLight) state.keyLight.intensity = 1.0 + shadowStrength * 0.9;
