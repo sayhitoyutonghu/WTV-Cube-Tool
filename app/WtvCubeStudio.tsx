@@ -1475,6 +1475,9 @@ function flipHorizontalSpan(shape: ShapeId, cubeSize: number) {
 }
 
 function flipShapeCrossover(rotationZ: number, shownShape: ShapeId, startShape: ShapeId, endShape: ShapeId, cubeSize: number) {
+  // Same outline on both sides means there is no handoff to cover. Flattening
+  // the silhouette anyway would pinch the shape at 90 degrees for no reason.
+  if (startShape === endShape) return { face: 1, edge: 1 };
   const faceShare = Math.abs(Math.cos(rotationZ));
   const t = clamp(faceShare / FLIP_SHAPE_CROSSOVER_FACE, 0, 1);
   const faceEase = t * t * (3 - 2 * t);
@@ -1506,13 +1509,6 @@ function gridSpacing(shape: ShapeId, shapeB: ShapeId, cubeSize: number, mode: Mo
   if (mode === "roll") return Math.max(BASE_SPACING, cubeSize * ROLL_SPACING, shapePitch);
   if (mode === "flip") return Math.max(FLIP_GRID_SPACING, footprint * FLIP_SHAPE_GAP);
   return Math.max(BASE_SPACING, shapePitch);
-}
-
-function otherShape(shape: ShapeId): ShapeId {
-  if (shape === "cube") return "circle";
-  if (shape === "circle") return "star";
-  if (shape === "star") return "triangle";
-  return "cube";
 }
 
 function flipPair(row: number, col: number, shapeA: ShapeId, shapeB: ShapeId) {
@@ -2021,14 +2017,12 @@ export default function WtvCubeStudio() {
         // Roll is a square-edge tip; non-cubes default onto Spin so the mark
         // stays put while the silhouette turns.
         const nextMode = nextShape !== "cube" && current.mode === "roll" ? "spin" : current.mode;
-        const nextShapeB = current.shapeB === nextShape ? otherShape(nextShape) : current.shapeB;
-        return { ...current, shape: nextShape, shapeB: nextShapeB, mode: nextMode };
+        return { ...current, shape: nextShape, mode: nextMode };
       }
-      if (key === "shapeB") {
-        const nextShapeB = value as ShapeId;
-        const nextShape = current.shape === nextShapeB ? otherShape(nextShapeB) : current.shape;
-        return { ...current, shape: nextShape, shapeB: nextShapeB };
-      }
+      // A and B may be the same shape. Picking one used to shove the other onto
+      // a different outline, which made a same-shape flip impossible to select
+      // and contradicted flip's own defaults below, where both are circle. The
+      // turn is a back-to-front reveal; changing outline across it is optional.
       if (key === "mode" && value === "flip") {
         return {
           ...current,
@@ -2415,7 +2409,7 @@ export default function WtvCubeStudio() {
                 </button>
               ))}
             </div>
-            <p className="camera-help">Flip waves A↔B on a checkerboard. Logo stays inside every outline.</p>
+            <p className="camera-help">Flip waves A↔B on a checkerboard. Pick the same shape twice to turn one outline over. Logo stays inside every outline.</p>
           </PanelSection>
 
           <PanelSection title="Grid" value={`${settings.density} \u00d7 ${settings.cubeSize}px`}>

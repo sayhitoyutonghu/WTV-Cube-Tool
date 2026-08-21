@@ -129,6 +129,8 @@ test("removes starter-only assets and dependencies", async () => {
   assert.match(component, /const footprint = mode === "flip"\s*\? Math\.max\(shapeFootprint\(shape, cubeSize\), shapeFootprint\(shapeB, cubeSize\)\)\s*: shapeFootprint\(shape, cubeSize\)/, "only flip renders shape B, so it must not widen the lattice of the modes that show shape A alone");
   assert.match(component, /settings\.mode === "flip"\s*\? Array\.from\(new Set<ShapeId>\(\[settings\.shape, settings\.shapeB\]\)\)/, "flip should build both selected shape geometries");
   assert.match(component, /settings\.mode === "flip"\s*\? flipPair\(row, col, settings\.shape, settings\.shapeB\)/, "flip should use the selected A/B pair on the checkerboard");
+  assert.doesNotMatch(component, /otherShape\(/, "picking one flip shape must not shove the other onto a different outline, or a same-shape flip cannot be selected");
+  assert.match(component, /if \(startShape === endShape\) return \{ face: 1, edge: 1 \}/, "a same-shape flip has no handoff to hide, so it should not pinch at the midpoint");
   assert.match(component, /circle: 1\.26,[\s\S]*?star: 1\.85,[\s\S]*?triangle: 2\.05,/, "every outline should read at a comparable size instead of growing around a cube-scale logo");
   assert.match(component, /const markHalf = half \* markScaleFor\(shape\);/, "the lockup should scale to the outline that carries it");
   assert.match(component, /star: STAR_INNER_RATIO,/, "the star should size its lockup to the notch circle it can actually hold");
