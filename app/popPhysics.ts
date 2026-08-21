@@ -1,44 +1,49 @@
 import * as CANNON from "cannon-es";
 
-/* Rigid body bake for the pop heap.
+/* Rigid body bake for the pop clump.
  *
  * Every other motion in the studio is a closed form: give it a time and it
  * hands back a pose, which is what lets the timeline scrub anywhere and the
  * exporter ask for frames in any order. A contact solve cannot work that way —
  * frame N only exists once frame N-1 has been solved. So the whole sequence is
  * simulated once, up front, and stored; playback and export then read it like
- * any other lookup and the rest of the studio never learns that physics is
- * involved.
+ * any other lookup and the rest of the studio never learns physics is involved.
+ *
+ * The setup follows the reference build: world gravity off, a point force at
+ * the origin pulling everything onto the spot the camera looks at, heavy
+ * translation damping so nothing is flung back out, and no floor at all. No
+ * floor is what makes this a clump held in mid air rather than a heap sitting
+ * on something, and it is why nothing in the reference casts a shadow.
  *
  * The solve is stepped at a fixed rate off a seeded start state, so the same
- * settings always bake the same heap. Nothing here reads the clock.
+ * settings always bake the same clump. Nothing here reads the clock.
  */
 
 export type PopBodySpec = {
-  /** Box for the cube, disc for every extruded outline. */
-  kind: "box" | "disc";
-  /** Half-width of the box, or radius of the disc. */
+  /** Box for the cube; every extruded outline is met as its own convex hull. */
+  kind: "box" | "hull";
+  /** Half-width of the box, or circumradius of the hull. */
   radius: number;
-  /** Extrusion depth. The mark sits on +x, so a disc's axis is x too. */
+  /** Sides of the hull. A star's convex hull is the polygon through its tips. */
+  sides: number;
+  /** Extrusion depth. The mark sits on +x, so a hull's axis is x too. */
   depth: number;
 };
 
 export type PopBakeInput = {
   bodies: PopBodySpec[];
   cubeSize: number;
-  /** Percent, as the Gravity control reports it. */
+  /** Percent. Drives the strength of the pull onto the origin. */
   gravity: number;
-  /** Percent, as the Bounce control reports it. */
+  /** Percent. The reference leaves bounciness at zero; this rides under it. */
   bounce: number;
-  /** Percent, as the Tumble control reports it. */
+  /** Percent. Drives the spin the bodies are released with. */
   tumble: number;
   seed: number;
   duration: number;
   fps: number;
-  /** Radius of the ring the bodies are thrown in from. */
+  /** Half-width of the array the bodies are released from. */
   spawnRadius: number;
-  /** Half-height of the column the attractor gathers them into. */
-  columnHeight: number;
 };
 
 /** Seven floats per body: position xyz, then quaternion xyzw. */
@@ -50,31 +55,20 @@ export type PopBake = {
   fps: number;
 };
 
-// Sub-stepping the solve rather than stepping it once per rendered frame. A
-// stack this deep goes soft and sinks into itself at 30Hz; four sub-steps hold
-// the contacts without making the bake noticeably slower.
 const SUB_STEPS = 3;
-const SOLVER_ITERATIONS = 10;
-// The heap is held to a column by a radial spring, not by a wall of static
-// bodies. A ring of boxes let roughly a third of the field straight through:
-// cannon meets a cylinder as a convex hull, and convex-against-box contacts are
-// the least reliable pair it has, so the discs simply walked out. A force needs
-// no contact at all and holds every shape the same.
-const CONTAINMENT = 240;
-// Outward speed is bled off at the rim as well, or a body arrives with enough
-// of it to ride out through the spring before the spring can turn it.
-const CONTAINMENT_DAMPING = 0.55;
-/** Column radius, in body widths. Roughly the reference's three-to-four wide. */
-const COLUMN_RADIUS = 2.45;
-// Low enough that the heap settles instead of arching. At 0.42 the bodies
-// bridged against each other on the way down and set as a needle sixteen widths
-// tall and barely two across; they need to be able to slide past one another to
-// find the packing underneath them.
-const FRICTION = 0.22;
-// Bleed off spin and drift so the heap actually comes to rest inside the
-// sequence instead of still creeping when the cut arrives.
-const LINEAR_DAMPING = 0.16;
-const ANGULAR_DAMPING = 0.22;
+const SOLVER_ITERATIONS = 12;
+// A point force with no falloff, which is where the reference leaves its
+// field: the same pull wherever a body happens to be. Held as an acceleration
+// in body widths so it never has to be retuned when the bodies are resized.
+const GATHER = 30;
+// The reference's one deliberate move away from the defaults, and the setting
+// the whole effect rests on. Without it the bodies reach the middle at speed,
+// bounce off one another and scatter straight back out; at 0.8 they arrive,
+// meet, and stay met.
+const LINEAR_DAMPING = 0.8;
+const ANGULAR_DAMPING = 0.1;
+// Blender's rigid body defaults, which the reference does not open.
+const FRICTION = 0.5;
 
 function hash(value: number, seed: number) {
   const n = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
@@ -86,22 +80,28 @@ function makeShape(spec: PopBodySpec): { shape: CANNON.Shape; orientation?: CANN
     const half = spec.radius;
     return { shape: new CANNON.Box(new CANNON.Vec3(spec.depth / 2, half, half)) };
   }
-  // Cannon's cylinder stands on y; every outline here is extruded along x, so
-  // the proxy is laid over to match or the heap would key off the wrong axis.
+  // Cannon builds a cylinder as an n-sided prism, so asking for the outline's
+  // own side count gives its convex hull exactly — five sides for the star,
+  // three for the triangle, which is what Convex Hull means for those shapes
+  // in the reference too. The prism stands on y and every outline here is
+  // extruded along x, so it is laid over to match.
   const orientation = new CANNON.Quaternion();
   orientation.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
-  return { shape: new CANNON.Cylinder(spec.radius, spec.radius, spec.depth, 12), orientation };
+  return {
+    shape: new CANNON.Cylinder(spec.radius, spec.radius, spec.depth, spec.sides),
+    orientation,
+  };
 }
 
 export function bakePopHeap(input: PopBakeInput): PopBake {
-  const { bodies, cubeSize, seed, duration, fps, spawnRadius, columnHeight } = input;
-  const gravityScale = Math.max(0.4, Math.min(1.8, input.gravity / 100));
-  // Bounce is held well under the control's face value: a lively restitution
-  // keeps the top of the heap chattering long after the cut should have landed.
-  const restitution = Math.max(0, Math.min(1, input.bounce / 100)) * 0.28;
+  const { bodies, cubeSize, seed, duration, fps, spawnRadius } = input;
+  const gatherScale = Math.max(0.4, Math.min(1.8, input.gravity / 100));
+  const restitution = Math.max(0, Math.min(1, input.bounce / 100)) * 0.12;
   const tumble = Math.max(0, Math.min(1, input.tumble / 100));
 
-  const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82 * cubeSize * 0.6 * gravityScale, 0) });
+  // No world gravity and no floor. The pull onto the origin is the only force
+  // in the scene, so there is no down for anything to fall to.
+  const world = new CANNON.World({ gravity: new CANNON.Vec3(0, 0, 0) });
   world.broadphase = new CANNON.SAPBroadphase(world);
   world.allowSleep = false;
   (world.solver as CANNON.GSSolver).iterations = SOLVER_ITERATIONS;
@@ -113,11 +113,13 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
   world.defaultContactMaterial.friction = FRICTION;
   world.defaultContactMaterial.restitution = restitution;
 
-  const ground = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane(), material: surface });
-  ground.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-  world.addBody(ground);
-
+  // Released as a block, the way the reference starts on an array of heads and
+  // lets the field draw them in.
+  const columns = Math.max(2, Math.round(Math.sqrt(bodies.length * 1.25)));
+  const rows = Math.max(1, Math.ceil(bodies.length / columns));
+  const pitch = (spawnRadius * 2) / Math.max(1, columns - 1);
   const dynamic: CANNON.Body[] = [];
+
   bodies.forEach((spec, index) => {
     const { shape, orientation } = makeShape(spec);
     const body = new CANNON.Body({
@@ -128,24 +130,20 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
     });
     body.addShape(shape, new CANNON.Vec3(0, 0, 0), orientation);
 
-    // Thrown in from a ring, aimed a little above the floor so the heap builds
-    // upward instead of skidding outward off the first contact.
-    const angle = hash(index * 3 + 1, seed) * Math.PI * 2;
-    // Released above the column rather than out on a wide ring. Thrown in from
-    // far away they arrived with enough sideways speed to climb the wall and
-    // spill over it; dropped down the shaft they pile instead.
-    const height = columnHeight * (0.6 + hash(index * 3 + 2, seed) * 2.6);
-    const radius = spawnRadius * hash(index * 3 + 3, seed);
-    body.position.set(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    body.position.set(
+      (hash(index + 11, seed) - 0.5) * pitch * 0.9,
+      (row - (rows - 1) / 2) * pitch,
+      (col - (columns - 1) / 2) * pitch,
+    );
     body.quaternion.setFromEuler(
       (hash(index + 41, seed) - 0.5) * Math.PI * 2,
       (hash(index + 49, seed) - 0.5) * Math.PI * 2,
       (hash(index + 57, seed) - 0.5) * Math.PI * 2,
     );
 
-    const speed = cubeSize * (1.4 + hash(index + 61, seed) * 2.2);
-    body.velocity.set(-Math.cos(angle) * speed, -speed * 1.6, -Math.sin(angle) * speed);
-    const spin = tumble * 9;
+    const spin = tumble * 7;
     body.angularVelocity.set(
       (hash(index + 71, seed) - 0.5) * spin,
       (hash(index + 79, seed) - 0.5) * spin,
@@ -156,33 +154,21 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
     dynamic.push(body);
   });
 
-  const columnRadius = cubeSize * COLUMN_RADIUS;
   const frameCount = Math.max(2, Math.round(duration * fps) + 1);
   const frames: Float32Array[] = [];
   const fixedStep = 1 / (fps * SUB_STEPS);
+  const pull = GATHER * cubeSize * gatherScale;
 
   for (let frame = 0; frame < frameCount; frame += 1) {
     if (frame > 0) {
       for (let sub = 0; sub < SUB_STEPS; sub += 1) {
-        // Anything past the rim is pushed back toward the axis, harder the
-        // further out it is, and has its outward speed bled off so it settles
-        // against the boundary instead of bouncing along it.
         for (const body of dynamic) {
-          const offsetX = body.position.x;
-          const offsetZ = body.position.z;
-          const distance = Math.hypot(offsetX, offsetZ);
+          const { x, y, z } = body.position;
+          const distance = Math.hypot(x, y, z);
           if (distance <= 1e-3) continue;
-          const dirX = offsetX / distance;
-          const dirZ = offsetZ / distance;
-          const excess = distance - columnRadius;
-          if (excess <= 0) continue;
-          body.force.x -= dirX * CONTAINMENT * excess * body.mass;
-          body.force.z -= dirZ * CONTAINMENT * excess * body.mass;
-          const outward = body.velocity.x * dirX + body.velocity.z * dirZ;
-          if (outward > 0) {
-            body.velocity.x -= dirX * outward * CONTAINMENT_DAMPING;
-            body.velocity.z -= dirZ * outward * CONTAINMENT_DAMPING;
-          }
+          body.force.x -= (x / distance) * pull * body.mass;
+          body.force.y -= (y / distance) * pull * body.mass;
+          body.force.z -= (z / distance) * pull * body.mass;
         }
         world.step(fixedStep);
       }

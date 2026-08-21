@@ -209,9 +209,12 @@ function clamp(value: number, min: number, max: number) {
 // geometry is untouched either way.
 function popBodySpec(shape: ShapeId, cubeSize: number): PopBodySpec {
   const half = cubeSize / 2;
-  if (shape === "cube") return { kind: "box", radius: half, depth: cubeSize };
-  const inset = shape === "star" ? 0.72 : shape === "triangle" ? 0.8 : 1;
-  return { kind: "disc", radius: half * SHAPE_RADIUS[shape] * inset, depth: cubeSize };
+  if (shape === "cube") return { kind: "box", radius: half, sides: 4, depth: cubeSize };
+  // The reference meets every body as a convex hull, and a hull of these
+  // outlines is just the polygon through their corners: five sides for the
+  // star, three for the triangle, a fine ring for the circle.
+  const sides = shape === "star" ? 5 : shape === "triangle" ? 3 : 16;
+  return { kind: "hull", radius: half * SHAPE_RADIUS[shape], sides, depth: cubeSize };
 }
 
 function formatTimecode(value: number) {
@@ -1660,8 +1663,10 @@ function buildThreeScene(
   const spacing = gridSpacing(settings.shape, settings.shapeB, settings.cubeSize, settings.mode);
   // The solve decides how tall the heap ends up, so pop is framed off the one
   // dimension that is fixed: the radius it is held to.
+  // The clump settles to roughly two body widths of radius, so it is framed
+  // off that rather than off a lattice it no longer has.
   state.extent = settings.mode === "pop"
-    ? settings.cubeSize * 7.4
+    ? settings.cubeSize * 5.2
     : Math.max(columns, rows) * BASE_SPACING * FRAMING;
   state.gridColumns = columns;
   state.gridRows = rows;
@@ -1717,8 +1722,10 @@ function buildThreeScene(
   // Pop no longer lays its bodies out at all: a contact solve decides where
   // they end up, so all that is fixed here is how many there are. They are
   // parked at the origin and the bake overwrites every transform each frame.
+  // The reference gathers twenty. Enough to read as a crowd, few enough that
+  // every one of them is still its own object rather than part of a mass.
   const popCount = settings.mode === "pop"
-    ? clamp(Math.round(settings.density * 6), 18, 140)
+    ? clamp(Math.round(settings.density * 3), 10, 80)
     : 0;
   let popSlot = 0;
 
@@ -1782,6 +1789,10 @@ function buildThreeScene(
     metalness: 0,
   });
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+  // Pop has no floor. The clump is held in mid air by the pull onto the origin,
+  // and a floor would give it a bottom to sit on and a shadow to cast — neither
+  // of which the reference has.
+  ground.visible = settings.mode !== "pop";
   if (settings.mode === "flip") {
     ground.rotation.y = Math.PI / 2;
     ground.position.x = -settings.cubeSize * 0.7;
@@ -1926,8 +1937,8 @@ function drawScene(
   state.camera.up.set(0, 1, 0);
   // Pop has to be looked at where the heap actually is. Every other mode sits
   // on the floor, so the shared target is just above it.
-  // Halfway up a settled heap, which runs about three bodies tall.
-  const popTarget = settings.cubeSize * 1.7;
+  // The clump gathers on the origin, which is exactly where the camera looks.
+  const popTarget = 0;
   state.camera.lookAt(
     0,
     settings.mode === "flip" ? 0 : settings.mode === "pop" ? popTarget : settings.cubeSize * 0.18,
@@ -1961,10 +1972,9 @@ function drawScene(
         seed,
         duration: settings.sequenceDuration,
         fps: EXPORT_FPS,
-        // Released down the shaft of the column rather than thrown at it from
-        // outside: sideways speed at the rim is what used to send bodies over.
-        spawnRadius: settings.cubeSize * 1.6,
-        columnHeight: settings.cubeSize * 5.6,
+        // Released as a block a few widths out and drawn in, the way the
+        // reference starts on an array and lets the field do the gathering.
+        spawnRadius: settings.cubeSize * 2.6,
       });
       state.popBakeKey = popKey;
     }
@@ -2223,9 +2233,9 @@ export default function WtvCubeStudio() {
       // and contradicted flip's own defaults below, where both are circle. The
       // turn is a back-to-front reveal; changing outline across it is optional.
       if (key === "mode" && value === "pop") {
-        // A heap read from up high flattens into a solid block. Drop the
-        // elevation and it reads as a pile with a silhouette.
-        return { ...current, mode: "pop", cameraYaw: 38, cameraPitch: 15, cameraZoom: 100 };
+        // The clump floats on the camera's own centre, so it reads from more or
+        // less head on. Any elevation just tips a ball.
+        return { ...current, mode: "pop", cameraYaw: 45, cameraPitch: 8, cameraZoom: 100 };
       }
       if (key === "mode" && value === "flip") {
         return {
