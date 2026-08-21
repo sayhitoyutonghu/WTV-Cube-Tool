@@ -116,26 +116,33 @@ const FLIP_TURN_FRACTION = 0.3;
 const FLIP_SHAPE_CROSSOVER_FACE = 0.42;
 const FLIP_CROSSOVER_FACE_SCALE = 0.08;
 const FLIP_CAMERA_SCALE = 1.12;
-// Pop throws its bodies out of the middle of the field. The reference is a
-// force field sitting at the origin, so the throw is described in rings out
-// from there: how far apart in cells the rings launch, how much of the field
-// the stagger covers, and how hard a body is carried past its own cell before
-// it settles back onto it.
-const POP_RING_PITCH = 1.72;
-const POP_RING_SPAN = 4.5;
-// Without a little jitter a whole ring fires in lockstep and the burst reads as
-// a expanding outline rather than a crowd.
-const POP_RING_SCATTER = 0.14;
+// Pop packs its bodies into a heap in the middle of frame. The reference is a
+// force field pulling rigid bodies together until they collide and pile up, so
+// the resting field has no order to its positions at all — every other mode
+// ends on a lattice, this one ends on a clump. The order lives entirely in the
+// rotations, which still come home so that every mark faces the camera.
+// Radius of the heap, in body widths. Shared with the packing that lays the
+// resting positions out, so the two cannot drift apart.
+const POP_PACK_REACH = 3.2;
+// Minimum centre-to-centre spacing in the heap, in body widths. Below 1 the
+// bodies visibly interpenetrate; this is a packing, not a simulation, so the
+// separation has to be built into the layout rather than resolved on contact.
+const POP_PACK_PITCH = 1.04;
+// How far a body strays off its packing lattice point. Enough that no row of
+// the heap ever reads as a row; not so much that neighbours interpenetrate.
+const POP_PACK_JITTER = 0.55;
+// How far out a body starts, in body widths. Far enough to be off frame at
+// every crop, so a body is never seen waiting to be pulled in.
+const POP_ENTRY_DISTANCE = 26;
+// Bodies deep in the heap arrive first and the outside lands on top of them,
+// which is the order a pile actually forms in.
+const POP_ARRIVAL_SPREAD = 0.7;
+const POP_ARRIVAL_SCATTER = 0.34;
 const POP_FLIGHT = 0.95;
-const POP_OVERSHOOT = 0.12;
-// How small a body is at the instant it is thrown. Not zero: at zero it winks
-// into being, and the throw should already be underway.
-const POP_SEED_SCALE = 0.14;
-// Bodies launch from a tight ring rather than from dead centre. Sharing one
-// point put every cell waiting its turn inside every other one, which rendered
-// as a single knot of intersecting geometry sitting in the middle of frame.
-const POP_LAUNCH_INSET = 0.13;
-const POP_TUMBLE = 2.8;
+// Carried a little past its resting place and drawn back — what reads as the
+// jostle of settling into a pack without resolving a single real contact.
+const POP_OVERSHOOT = 0.11;
+const POP_TUMBLE = 3.2;
 
 // Grid pitch every mode is framed against, so switching modes never changes how
 // large a cube appears.
@@ -579,6 +586,7 @@ function getMotion(
   cubeSize: number,
   rollTurns: number,
   cellX: number,
+  cellY: number,
   cellZ: number,
 ): MotionPose {
   const random = hash(index + 1, seed);
@@ -671,46 +679,46 @@ function getMotion(
   }
 
   if (mode === "pop") {
-    // A body thrown out of the centre of the field, not a stamp swelling in
-    // place. Every cell begins collapsed at the origin and is carried out to
-    // its own lattice position, so the wave finally has a direction; the old
-    // version only scaled up where it already stood, which is why it read as
-    // inflating. Rings launch from the inside out, which is what makes the
-    // field look like one burst expanding instead of a diagonal fading up.
-    const radius = Math.hypot(cellX, cellZ);
-    const ring = radius / Math.max(1, cubeSize * POP_RING_PITCH);
-    const stagger = clamp(ring / POP_RING_SPAN + random * POP_RING_SCATTER, 0, 1);
+    // Bodies are pulled into the middle and pack, rather than being thrown out
+    // of it onto a lattice. Each one comes in along its own outward direction
+    // from far enough away to be off frame, so nothing is seen waiting.
+    const homeLength = Math.max(1, Math.hypot(cellX, cellY, cellZ));
+    const entry = cubeSize * POP_ENTRY_DISTANCE;
+    const entryX = (cellX / homeLength) * entry;
+    const entryY = (cellY / homeLength) * entry;
+    const entryZ = (cellZ / homeLength) * entry;
+    const depth = clamp(homeLength / Math.max(1, cubeSize * POP_PACK_REACH), 0, 1);
+    const stagger = clamp(depth * POP_ARRIVAL_SPREAD + random * POP_ARRIVAL_SCATTER, 0, 1);
     const { local, cycle } = waveLocalTime(time, sequenceDuration, alignSpeed, stagger, POP_FLIGHT, ROLL_STAGGER * 0.62);
-    // Tumble carried out of the centre, unwound to nothing on arrival so the
-    // mark still faces the camera on the settled frame every other mode ends on.
+    // Tumbling on the way in, unwound to nothing on arrival. The heap is
+    // disordered in position and ordered in rotation: that is what keeps every
+    // mark facing the camera on a frame where nothing else lines up.
     const spinX = (hash(index + 41, seed) - 0.5) * POP_TUMBLE * strength;
     const spinY = (hash(index + 49, seed) - 0.5) * POP_TUMBLE * strength;
     const spinZ = (hash(index + 57, seed) - 0.5) * POP_TUMBLE * strength;
     if (local <= 0) {
-      // Not yet thrown, and so not yet anywhere: parking these at the launch
-      // point stacked the whole waiting field into one lump at the centre.
-      return { rx: spinX, ry: spinY, rz: spinZ, lift: 0, offsetX: -cellX, offsetZ: -cellZ, scale: 0.001, revealed: false };
+      // Still on its way in from off frame. Held at nothing rather than drawn
+      // out there, so a wide zoom can never catch the bodies queueing.
+      return { rx: spinX, ry: spinY, rz: spinZ, lift: 0, offsetX: entryX, offsetZ: entryZ, scale: 0.001, revealed: false };
     }
     const t = clamp(local / cycle, 0, 1);
-    // Fast out of the centre, decelerating into the cell. The cubic ease-out is
-    // the whole difference between being thrown and being inflated; this used
-    // to be t * t, which starts slow and accelerates into a hard stop.
+    // Fast off the mark, decelerating in. The cubic ease-out is the whole
+    // difference between being pulled and being faded up; this used to be
+    // t * t, which starts slow and accelerates into a hard stop.
     const flight = 1 - Math.pow(1 - t, 3);
-    // Carried a little past its own cell and drawn back, the way a thrown body
-    // arrives. Vanishes at both ends, so it never fights the landing.
     const overshoot = Math.sin(Math.PI * t) * POP_OVERSHOOT * (1 - t);
-    // Measured from the launch ring rather than from the origin, so the burst
-    // starts as a cluster with size to it instead of a point.
-    const reach = POP_LAUNCH_INSET + (1 - POP_LAUNCH_INSET) * (flight + overshoot);
+    const reach = clamp(flight + overshoot, 0, 1.3);
     const remaining = 1 - flight;
     return {
       rx: spinX * remaining,
       ry: spinY * remaining,
       rz: spinZ * remaining,
-      lift: 0,
-      offsetX: -cellX * (1 - reach),
-      offsetZ: -cellZ * (1 - reach),
-      scale: Math.max(0.001, POP_SEED_SCALE + (1 - POP_SEED_SCALE) * flight),
+      // lift carries the vertical leg of the approach; the heap floats where it
+      // was packed rather than resting on the floor every other mode stands on.
+      lift: (entryY * (1 - reach)) / Math.max(1, cubeSize),
+      offsetX: entryX * (1 - reach),
+      offsetZ: entryZ * (1 - reach),
+      scale: 1,
       revealed: false,
     };
   }
@@ -948,6 +956,7 @@ function drawScene2dLegacy(
       settings.cubeSize,
       settings.rollTurns,
       cube.x,
+      0, // the legacy 2D path has no vertical axis; pop is Three.js only
       cube.z,
     );
     const centerX = cube.x + movement.offsetX;
@@ -996,6 +1005,7 @@ function drawScene2dLegacy(
       settings.cubeSize,
       settings.rollTurns,
       cube.x,
+      0, // the legacy 2D path has no vertical axis; pop is Three.js only
       cube.z,
     );
     const localVertices: Vec3[] = [
@@ -1643,7 +1653,8 @@ function buildThreeScene(
     metalness: 0,
   });
 
-  const shapesNeeded: ShapeId[] = settings.mode === "flip"
+  // Flip shows both outlines across the turn; pop mixes them through the heap.
+  const shapesNeeded: ShapeId[] = settings.mode === "flip" || settings.mode === "pop"
     ? Array.from(new Set<ShapeId>([settings.shape, settings.shapeB]))
     : [settings.shape];
   const geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>> = {};
@@ -1673,21 +1684,57 @@ function buildThreeScene(
   }
 
   const stride = columns + 3;
+  // Pop rests as a heap rather than a lattice: a jittered lattice clipped to a
+  // sphere. The lattice is what keeps bodies from interpenetrating — this is a
+  // packing, not a simulation, so separation has to be built into the positions
+  // instead of resolved on contact — and the jitter is what stops any row of it
+  // reading as a row.
+  const popSlots: Array<{ x: number; y: number; z: number }> = [];
+  if (settings.mode === "pop") {
+    const pitch = settings.cubeSize * POP_PACK_PITCH;
+    const reach = settings.cubeSize * POP_PACK_REACH;
+    const span = Math.ceil(reach / pitch);
+    for (let ix = -span; ix <= span; ix += 1) {
+      for (let iy = -span; iy <= span; iy += 1) {
+        for (let iz = -span; iz <= span; iz += 1) {
+          const key = ix * 73856093 + iy * 19349663 + iz * 83492791;
+          const x = ix * pitch + (hash(key + 1, 0) - 0.5) * pitch * POP_PACK_JITTER;
+          const y = iy * pitch + (hash(key + 2, 0) - 0.5) * pitch * POP_PACK_JITTER;
+          const z = iz * pitch + (hash(key + 3, 0) - 0.5) * pitch * POP_PACK_JITTER;
+          if (Math.hypot(x, y, z) > reach) continue;
+          popSlots.push({ x, y, z });
+        }
+      }
+    }
+    // Frame the heap, not the lattice the other modes are framed against.
+    state.extent = reach * 2.4;
+  }
+  let popSlot = 0;
+
   const margin = settings.mode === "roll"
     ? Math.ceil((settings.rollTurns * settings.cubeSize) / spacing) + 1
     : 1;
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
       const index = (row + margin + 1) * stride + col + 2;
+      const slot = settings.mode === "pop" ? popSlots[popSlot++] : undefined;
+      if (settings.mode === "pop" && !slot) continue;
       const staggerX = settings.mode === "flip" ? 0 : row % 2 === 0 ? 0 : spacing * 0.5;
-      const x = settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
-      const y = settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
-      const z = settings.mode === "flip"
-        ? (col - (columns - 1) / 2) * spacing
-        : (row - (rows - 1) / 2) * spacing;
+      const x = slot ? slot.x : settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
+      const y = slot ? slot.y : settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
+      const z = slot
+        ? slot.z
+        : settings.mode === "flip"
+          ? (col - (columns - 1) / 2) * spacing
+          : (row - (rows - 1) / 2) * spacing;
+      // Flip pairs the two outlines across the turn; pop scatters them through
+      // the heap, so a body keeps whichever it was dealt from end to end.
+      const popShape = hash(index + 61, 0) < 0.5 ? settings.shape : settings.shapeB;
       const pair = settings.mode === "flip"
         ? flipPair(row, col, settings.shape, settings.shapeB)
-        : { startShape: settings.shape, endShape: settings.shape };
+        : settings.mode === "pop"
+          ? { startShape: popShape, endShape: popShape }
+          : { startShape: settings.shape, endShape: settings.shape };
       const startGeometry = geometryByShape[pair.startShape] ?? cubeGeometry;
       const startMaterials = materialsByShape[pair.startShape] ?? cubeMaterials;
       const mesh = new THREE.Mesh(startGeometry, startMaterials);
@@ -1883,6 +1930,7 @@ function drawScene(
       settings.cubeSize,
       settings.rollTurns,
       cube.x,
+      cube.y,
       cube.z,
     );
     const shownShape = movement.revealed ? cube.endShape : cube.startShape;
@@ -1895,7 +1943,11 @@ function drawScene(
     }
     const rotatedVertices = localVertices.map((point) => rotate(point, movement.rx, movement.ry, movement.rz));
     const minimumLocalY = Math.min(...rotatedVertices.map((point) => point.y));
-    const contactHeight = settings.mode === "flip" ? cube.y : -minimumLocalY + movement.lift * settings.cubeSize;
+    const contactHeight = settings.mode === "flip"
+      ? cube.y
+      : settings.mode === "pop"
+        ? cube.y + movement.lift * settings.cubeSize
+        : -minimumLocalY + movement.lift * settings.cubeSize;
     return {
       cube,
       movement,
