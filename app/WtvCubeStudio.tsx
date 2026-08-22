@@ -134,6 +134,9 @@ const POP_PACK_REACH = 3.2;
 // grid and squares up to the camera, so the section hands over to the payoff on
 // the same full frame of marks that flip ends on.
 const POP_SPREAD_START = 0.68;
+// Share of the spread spent opening out across the frame before the field is
+// flattened onto it.
+const POP_OPEN_SHARE = 0.68;
 // Spread of the resting orientations, scaled by Tumble so the disorder in the
 // heap is on the same control as the disorder in every other mode.
 const POP_REST_SPREAD = 1.8;
@@ -211,10 +214,20 @@ function clamp(value: number, min: number, max: number) {
 // solved as one hull, so every extruded outline is met as a disc of its own
 // footprint; packed this tightly the difference never surfaces, and the drawn
 // geometry is untouched either way.
-// The reference gathers twenty. Enough to read as a crowd, few enough that
-// every one of them is still its own object rather than part of a mass.
-function popCountFor(settings: Settings) {
-  return clamp(Math.round(settings.density * 3), 10, 80);
+// The reference gathers twenty: enough to read as a crowd, few enough that
+// every one is still its own object rather than part of a mass. The count is
+// then rounded up to fill the grid it opens out into, because a grid with three
+// empty slots in its bottom row is the first thing the eye finds.
+function popGrid(settings: Settings, aspect: number) {
+  const wanted = clamp(Math.round(settings.density * 3), 10, 80);
+  const columns = Math.max(1, Math.round(Math.sqrt(wanted * Math.max(0.45, aspect))));
+  const rows = Math.max(1, Math.ceil(wanted / columns));
+  // Pitched off the widest outline in play, not off the cube. A field of stars
+  // at cube pitch overlaps its neighbours where it comes to rest.
+  const pitch = Math.max(
+    ...(Object.keys(SHAPE_LABELS) as ShapeId[]).map((shape) => shapeFootprint(shape, settings.cubeSize)),
+  ) * 1.04;
+  return { columns, rows, pitch, count: columns * rows };
 }
 
 function popBodySpec(shape: ShapeId, cubeSize: number): PopBodySpec {
@@ -1144,6 +1157,7 @@ type ThreeSceneState = {
   cubeMaterials: THREE.Material[];
   popBake: PopBake | null;
   popBakeKey: string;
+  popSlots: Vec3[];
   geometryByShape: Partial<Record<ShapeId, THREE.BufferGeometry>>;
   materialsByShape: Partial<Record<ShapeId, THREE.Material[]>>;
   brandTexture: THREE.CanvasTexture | null;
@@ -1675,11 +1689,8 @@ function buildThreeScene(
   // dimension that is fixed: the radius it is held to.
   // The clump settles to roughly two body widths of radius, so it is framed
   // off that rather than off a lattice it no longer has.
-  // The grid the clump spreads into. Sized off the body count and the crop, so
-  // it fills the frame whatever the density is set to.
-  const popColumns = Math.max(1, Math.round(Math.sqrt(Math.max(1, popCountFor(settings)) * Math.max(0.45, aspect))));
-  const popRows = Math.max(1, Math.ceil(Math.max(1, popCountFor(settings)) / popColumns));
-  const popSpacing = settings.cubeSize * 1.5;
+  // The grid the clump spreads into, sized so it fills the frame at any density.
+  const { columns: popColumns, rows: popRows, pitch: popSpacing } = popGrid(settings, aspect);
   // Framed on the grid it opens out into, which is the wider of the two states.
   state.extent = settings.mode === "pop"
     ? Math.max(popColumns, popRows) * popSpacing * 0.74
@@ -1744,7 +1755,7 @@ function buildThreeScene(
   // parked at the origin and the bake overwrites every transform each frame.
   // The reference gathers twenty. Enough to read as a crowd, few enough that
   // every one of them is still its own object rather than part of a mass.
-  const popCount = settings.mode === "pop" ? popCountFor(settings) : 0;
+  const popCount = settings.mode === "pop" ? popGrid(settings, aspect).count : 0;
   let popSlot = 0;
 
   const margin = settings.mode === "roll"
@@ -1755,15 +1766,9 @@ function buildThreeScene(
       const index = (row + margin + 1) * stride + col + 2;
       const popIndex = settings.mode === "pop" ? popSlot++ : -1;
       if (settings.mode === "pop" && popIndex >= popCount) continue;
-      // Pop has no lattice while it is a clump, so these carry the slot it
-      // spreads out to instead. The solve supplies everything before that.
-      const slot = popIndex < 0
-        ? undefined
-        : {
-            x: 0,
-            y: ((popRows - 1) / 2 - Math.floor(popIndex / popColumns)) * popSpacing,
-            z: ((popIndex % popColumns) - (popColumns - 1) / 2) * popSpacing,
-          };
+      // Pop has no lattice while it is a clump; where each body opens out to is
+      // decided after the solve, from where it actually came to rest.
+      const slot = popIndex < 0 ? undefined : { x: 0, y: 0, z: 0 };
       const staggerX = settings.mode === "flip" ? 0 : row % 2 === 0 ? 0 : spacing * 0.5;
       const x = slot ? slot.x : settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
       const y = slot ? slot.y : settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
@@ -1898,6 +1903,7 @@ function drawScene(
       cubeMaterials: [],
       popBake: null,
       popBakeKey: "",
+      popSlots: [],
       geometryByShape: {},
       materialsByShape: {},
       brandTexture: null,
@@ -2008,6 +2014,53 @@ function drawScene(
         spawnRadius: settings.cubeSize * 2.6,
       });
       state.popBakeKey = popKey;
+
+      // Which body opens out to which slot is decided here rather than at build
+      // time, because it depends on where each one actually came to rest.
+      //
+      // Handing every body its nearest free slot is not enough: two of them can
+      // still be dealt slots that need them to swap sides, and they cross. So
+      // the pairing is then improved until no swap would shorten it, measured
+      // as squared distance in the plane the camera sees. An assignment that is
+      // optimal under squared distance cannot contain a crossing — if two paths
+      // crossed, exchanging their targets would be shorter — so settling this
+      // is what removes them.
+      const { columns, rows, pitch } = popGrid(settings, width / height);
+      const open: Vec3[] = [];
+      for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < columns; col += 1) {
+          open.push({
+            x: 0,
+            y: ((rows - 1) / 2 - row) * pitch,
+            z: (col - (columns - 1) / 2) * pitch,
+          });
+        }
+      }
+      const settled = state.popBake.frames[state.popBake.frames.length - 1];
+      const paired = state.cubes.map((_, index) => Math.min(index, open.length - 1));
+      const reach = (body: number, slot: number) => {
+        const at = body * POP_STRIDE;
+        const dy = open[slot].y - settled[at + 1];
+        const dz = open[slot].z - settled[at + 2];
+        return dy * dy + dz * dz;
+      };
+      for (let pass = 0; pass < 60; pass += 1) {
+        let swapped = false;
+        for (let a = 0; a < paired.length; a += 1) {
+          for (let b = a + 1; b < paired.length; b += 1) {
+            const now = reach(a, paired[a]) + reach(b, paired[b]);
+            const other = reach(a, paired[b]) + reach(b, paired[a]);
+            if (other < now - 1e-6) {
+              const held = paired[a];
+              paired[a] = paired[b];
+              paired[b] = held;
+              swapped = true;
+            }
+          }
+        }
+        if (!swapped) break;
+      }
+      state.popSlots = paired.map((slot) => open[slot] ?? { x: 0, y: 0, z: 0 });
     }
   } else if (state.popBake) {
     state.popBake = null;
@@ -2088,12 +2141,19 @@ function drawScene(
   // rather than in the solve is what makes it clean: a grid has no contacts to
   // resolve, so nothing has to be pushed out of anything else.
   const popSpread = popBake
-    ? (() => {
-        const timeline = clamp(time / Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
-        const phase = clamp((timeline - POP_SPREAD_START) / (1 - POP_SPREAD_START), 0, 1);
-        return phase * phase * (3 - 2 * phase);
-      })()
+    ? clamp(
+        (clamp(time / Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD), 0, 1) - POP_SPREAD_START) /
+          (1 - POP_SPREAD_START),
+        0,
+        1,
+      )
     : 0;
+  const smooth = (value: number) => {
+    const held = clamp(value, 0, 1);
+    return held * held * (3 - 2 * held);
+  };
+  const popOpen = smooth(popSpread / POP_OPEN_SHARE);
+  const popFlatten = smooth((popSpread - POP_OPEN_SHARE) / (1 - POP_OPEN_SHARE));
   const popUpright = new THREE.Quaternion();
   const popSolved = new THREE.Quaternion();
 
@@ -2118,10 +2178,15 @@ function drawScene(
       const solvedX = a[i] + (b[i] - a[i]) * mix;
       const solvedY = a[i + 1] + (b[i + 1] - a[i + 1]) * mix;
       const solvedZ = a[i + 2] + (b[i + 2] - a[i + 2]) * mix;
+      const open = state.popSlots[bodyIndex] ?? { x: 0, y: 0, z: 0 };
+      // Opened out in the plane the camera sees first, and only flattened onto
+      // it once that is finished. Once every body holds its own row and column,
+      // moving along the depth axis cannot bring any two of them closer, so the
+      // flatten is safe by construction — done together, they collide.
       cube.mesh.position.set(
-        solvedX + (cube.x - solvedX) * popSpread,
-        solvedY + (cube.y - solvedY) * popSpread,
-        solvedZ + (cube.z - solvedZ) * popSpread,
+        solvedX + (open.x - solvedX) * popFlatten,
+        solvedY + (open.y - solvedY) * popOpen,
+        solvedZ + (open.z - solvedZ) * popOpen,
       );
       popSolved.set(a[i + 3], a[i + 4], a[i + 5], a[i + 6]);
       popUpright.set(b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
@@ -2129,7 +2194,7 @@ function drawScene(
       // Slerped onto square, not eased per axis: a body that tumbled to a stop
       // upside down should not take the long way round to get there.
       popUpright.identity();
-      popSolved.slerp(popUpright, popSpread);
+      popSolved.slerp(popUpright, popOpen);
       cube.mesh.quaternion.copy(popSolved);
       cube.mesh.scale.setScalar(1);
       return;
