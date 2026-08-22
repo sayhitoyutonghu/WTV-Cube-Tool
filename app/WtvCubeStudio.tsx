@@ -129,7 +129,11 @@ const POP_PACK_REACH = 3.2;
 // camera together. A pile reads as a pile because nothing in it agrees, so the
 // bodies hold their own orientations for as long as possible; the mark only has
 // to be readable on the frame the cut to the payoff actually lands on.
-const POP_ALIGN_START = 0.74;
+// Where the clump stops being a clump. Up to here it is a solved pile of
+// bodies in contact; from here every one of them travels to a slot on a flat
+// grid and squares up to the camera, so the section hands over to the payoff on
+// the same full frame of marks that flip ends on.
+const POP_SPREAD_START = 0.68;
 // Spread of the resting orientations, scaled by Tumble so the disorder in the
 // heap is on the same control as the disorder in every other mode.
 const POP_REST_SPREAD = 1.8;
@@ -207,6 +211,12 @@ function clamp(value: number, min: number, max: number) {
 // solved as one hull, so every extruded outline is met as a disc of its own
 // footprint; packed this tightly the difference never surfaces, and the drawn
 // geometry is untouched either way.
+// The reference gathers twenty. Enough to read as a crowd, few enough that
+// every one of them is still its own object rather than part of a mass.
+function popCountFor(settings: Settings) {
+  return clamp(Math.round(settings.density * 3), 10, 80);
+}
+
 function popBodySpec(shape: ShapeId, cubeSize: number): PopBodySpec {
   const half = cubeSize / 2;
   if (shape === "cube") return { kind: "box", radius: half, sides: 4, depth: cubeSize };
@@ -720,7 +730,7 @@ function getMotion(
     // in the last beat. The mark only has to read on the frame the cut to the
     // payoff lands on, so it buys the collision look for everything before it.
     const timeline = clamp(time / Math.max(0.5, sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
-    const alignPhase = clamp((timeline - POP_ALIGN_START) / (1 - POP_ALIGN_START), 0, 1);
+    const alignPhase = clamp((timeline - POP_SPREAD_START) / (1 - POP_SPREAD_START), 0, 1);
     const alignEase = alignPhase * alignPhase * (3 - 2 * alignPhase);
     const held = 1 - alignEase;
     if (local <= 0) {
@@ -1665,8 +1675,14 @@ function buildThreeScene(
   // dimension that is fixed: the radius it is held to.
   // The clump settles to roughly two body widths of radius, so it is framed
   // off that rather than off a lattice it no longer has.
+  // The grid the clump spreads into. Sized off the body count and the crop, so
+  // it fills the frame whatever the density is set to.
+  const popColumns = Math.max(1, Math.round(Math.sqrt(Math.max(1, popCountFor(settings)) * Math.max(0.45, aspect))));
+  const popRows = Math.max(1, Math.ceil(Math.max(1, popCountFor(settings)) / popColumns));
+  const popSpacing = settings.cubeSize * 1.5;
+  // Framed on the grid it opens out into, which is the wider of the two states.
   state.extent = settings.mode === "pop"
-    ? settings.cubeSize * 5.2
+    ? Math.max(popColumns, popRows) * popSpacing * 0.74
     : Math.max(columns, rows) * BASE_SPACING * FRAMING;
   state.gridColumns = columns;
   state.gridRows = rows;
@@ -1728,9 +1744,7 @@ function buildThreeScene(
   // parked at the origin and the bake overwrites every transform each frame.
   // The reference gathers twenty. Enough to read as a crowd, few enough that
   // every one of them is still its own object rather than part of a mass.
-  const popCount = settings.mode === "pop"
-    ? clamp(Math.round(settings.density * 3), 10, 80)
-    : 0;
+  const popCount = settings.mode === "pop" ? popCountFor(settings) : 0;
   let popSlot = 0;
 
   const margin = settings.mode === "roll"
@@ -1739,8 +1753,17 @@ function buildThreeScene(
   for (let row = -margin; row <= rows + margin; row += 1) {
     for (let col = -1; col <= columns; col += 1) {
       const index = (row + margin + 1) * stride + col + 2;
-      if (settings.mode === "pop" && popSlot++ >= popCount) continue;
-      const slot = settings.mode === "pop" ? { x: 0, y: 0, z: 0 } : undefined;
+      const popIndex = settings.mode === "pop" ? popSlot++ : -1;
+      if (settings.mode === "pop" && popIndex >= popCount) continue;
+      // Pop has no lattice while it is a clump, so these carry the slot it
+      // spreads out to instead. The solve supplies everything before that.
+      const slot = popIndex < 0
+        ? undefined
+        : {
+            x: 0,
+            y: ((popRows - 1) / 2 - Math.floor(popIndex / popColumns)) * popSpacing,
+            z: ((popIndex % popColumns) - (popColumns - 1) / 2) * popSpacing,
+          };
       const staggerX = settings.mode === "flip" ? 0 : row % 2 === 0 ? 0 : spacing * 0.5;
       const x = slot ? slot.x : settings.mode === "flip" ? 0 : (col - (columns - 1) / 2) * spacing + staggerX;
       const y = slot ? slot.y : settings.mode === "flip" ? ((rows - 1) / 2 - row) * spacing : 0;
@@ -2059,10 +2082,18 @@ function drawScene(
   }
 
   const popBake = settings.mode === "pop" ? state.popBake : null;
-  // The turn onto the camera happens inside the solve, not here: the bodies are
-  // packed while pointing every which way, so turning them afterwards would
-  // leave that packing meaningless and run them through one another. What the
-  // bake hands back is already facing the right way.
+  // The clump does not stay a clump. Over the last beat every body leaves the
+  // pile for a slot on a flat grid and squares up to the camera, so the section
+  // hands over on the same full frame of marks that flip ends on. Doing it here
+  // rather than in the solve is what makes it clean: a grid has no contacts to
+  // resolve, so nothing has to be pushed out of anything else.
+  const popSpread = popBake
+    ? (() => {
+        const timeline = clamp(time / Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD), 0, 1);
+        const phase = clamp((timeline - POP_SPREAD_START) / (1 - POP_SPREAD_START), 0, 1);
+        return phase * phase * (3 - 2 * phase);
+      })()
+    : 0;
   const popUpright = new THREE.Quaternion();
   const popSolved = new THREE.Quaternion();
 
@@ -2084,14 +2115,21 @@ function drawScene(
         cube.mesh.scale.setScalar(0);
         return;
       }
+      const solvedX = a[i] + (b[i] - a[i]) * mix;
+      const solvedY = a[i + 1] + (b[i + 1] - a[i + 1]) * mix;
+      const solvedZ = a[i + 2] + (b[i + 2] - a[i + 2]) * mix;
       cube.mesh.position.set(
-        a[i] + (b[i] - a[i]) * mix,
-        a[i + 1] + (b[i + 1] - a[i + 1]) * mix,
-        a[i + 2] + (b[i + 2] - a[i + 2]) * mix,
+        solvedX + (cube.x - solvedX) * popSpread,
+        solvedY + (cube.y - solvedY) * popSpread,
+        solvedZ + (cube.z - solvedZ) * popSpread,
       );
       popSolved.set(a[i + 3], a[i + 4], a[i + 5], a[i + 6]);
       popUpright.set(b[i + 3], b[i + 4], b[i + 5], b[i + 6]);
       popSolved.slerp(popUpright, mix);
+      // Slerped onto square, not eased per axis: a body that tumbled to a stop
+      // upside down should not take the long way round to get there.
+      popUpright.identity();
+      popSolved.slerp(popUpright, popSpread);
       cube.mesh.quaternion.copy(popSolved);
       cube.mesh.scale.setScalar(1);
       return;

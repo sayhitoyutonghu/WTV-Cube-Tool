@@ -77,14 +77,10 @@ const FRICTION = 0.5;
 // rather than all at once: twenty objects already in frame on the first frame
 // is a crowd that was always there, not a thing that pops.
 const RELEASE_SPAN = 0.45;
-// Where the clump stops tumbling and turns to face the camera, and how long it
-// takes to get there. The turn happens inside the solve rather than after it:
-// the bodies were packed while pointing every which way, so rotating them
-// afterwards leaves that packing meaningless and they end up run through one
-// another. Turned here, the solver still has frames left to push them apart and
-// settle them again — face on this time, and interlocking properly.
-const ALIGN_START = 0.66;
-const ALIGN_SPAN = 0.14;
+// Nothing here turns the bodies onto the camera any more. The clump does not
+// have to resolve into a tidy pack, because it does not stay a clump: the
+// studio spreads it out into a flat grid over the last beat, and a grid needs
+// no contacts at all. The solve's only job is the collision and the gathering.
 
 function hash(value: number, seed: number) {
   const n = Math.sin(value * 12.9898 + seed * 78.233) * 43758.5453;
@@ -181,38 +177,12 @@ export function bakePopHeap(input: PopBakeInput): PopBake {
   const releaseAt = dynamic.map((_, index) =>
     Math.floor((index / Math.max(1, dynamic.length)) * frameCount * RELEASE_SPAN),
   );
-  const alignFrom = Math.floor(frameCount * ALIGN_START);
-  const alignOver = Math.max(1, Math.round(frameCount * ALIGN_SPAN));
-  const upright = new CANNON.Quaternion(0, 0, 0, 1);
-  const turning: CANNON.Quaternion[] = dynamic.map(() => new CANNON.Quaternion());
-  let held = false;
-
   for (let frame = 0; frame < frameCount; frame += 1) {
     releaseAt.forEach((due, index) => {
       if (released[index] || frame < due) return;
       world.addBody(dynamic[index]);
       released[index] = true;
     });
-    if (frame === alignFrom) {
-      // Stop integrating rotation so the turn below is not fought by the
-      // solver, and remember where each body had come to rest.
-      dynamic.forEach((body, index) => {
-        turning[index].copy(body.quaternion);
-        body.fixedRotation = true;
-        body.angularVelocity.set(0, 0, 0);
-        body.updateMassProperties();
-      });
-      held = true;
-    }
-    if (held && frame >= alignFrom) {
-      const turn = Math.min(1, (frame - alignFrom) / alignOver);
-      const eased = turn * turn * (3 - 2 * turn);
-      dynamic.forEach((body, index) => {
-        // Slerped from where it settled, not eased per axis: a body that came
-        // to rest upside down should not take the long way round.
-        turning[index].slerp(upright, eased, body.quaternion);
-      });
-    }
     if (frame > 0) {
       for (let sub = 0; sub < SUB_STEPS; sub += 1) {
         for (let index = 0; index < dynamic.length; index += 1) {
