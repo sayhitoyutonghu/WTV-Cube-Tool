@@ -2154,16 +2154,29 @@ function drawScene(
   };
   const popOpen = smooth(popSpread / POP_OPEN_SHARE);
   const popFlatten = smooth((popSpread - POP_OPEN_SHARE) / (1 - POP_OPEN_SHARE));
+  // Once the field starts opening out it stops reading the solve and works from
+  // the frame it began on. Turning a body onto square from wherever it happens
+  // to be this frame looks fine until one of them has settled near upside down:
+  // there the axis of the turn is degenerate, the solve's last traces of motion
+  // are enough to flip which way round is shorter, and it twitches. Frozen, the
+  // path is decided once and cannot change under it.
+  const popFrozen = popBake
+    ? clamp(
+        Math.round(POP_SPREAD_START * Math.max(0.5, settings.sequenceDuration - ROLL_FINAL_HOLD) * popBake.fps),
+        0,
+        popBake.frames.length - 1,
+      )
+    : 0;
   const popUpright = new THREE.Quaternion();
   const popSolved = new THREE.Quaternion();
 
   cubeFrames.forEach((frame, bodyIndex) => {
     const { cube, movement } = frame;
     if (popBake) {
-      const at = clamp(time * popBake.fps, 0, popBake.frames.length - 1);
+      const at = popSpread > 0 ? popFrozen : clamp(time * popBake.fps, 0, popBake.frames.length - 1);
       const before = Math.floor(at);
       const after = Math.min(before + 1, popBake.frames.length - 1);
-      const mix = at - before;
+      const mix = popSpread > 0 ? 0 : at - before;
       const a = popBake.frames[before];
       const b = popBake.frames[after];
       const i = bodyIndex * POP_STRIDE;
